@@ -21,7 +21,15 @@ function Strokes.new(options)
     local api={}
     local function reset_motion()
         state.point=nil; state.raw_point=nil; state.raw_support=nil; state.candidate=nil; state.active=nil; state.quiet=0; state.spent_direction=nil
+        state.ended=nil
         state.phase="settling"
+    end
+    -- A committed stroke can stop before its native action binds a frame
+    -- later. Its record lets the owner sweep the path it already travelled,
+    -- once; the stroke itself is no longer active or claimable.
+    local function ended_stroke()
+        local ended=state.ended
+        return ended and ended.serial==state.serial and state.active==nil and ended or nil
     end
     local function remaining()
         return state.frozen or state.debt*(state.interval or 0)
@@ -34,7 +42,9 @@ function Strokes.new(options)
         return {reason=reason,committed=committed==true,stroke_id=state.serial,
             phase=state.phase,recovery=recovery(),remaining=remaining(),
             collision_allowed=state.active~=nil,intent_hand=state.active and state.active.intent_hand,
-            trajectory=state.active and state.active.trajectory}
+            trajectory=state.active and state.active.trajectory,
+            onset=state.active and state.active.onset or ended_stroke() and state.ended.onset or nil,
+            ended=ended_stroke()~=nil}
     end
     function api.update(request)
         request=request or {}
@@ -97,6 +107,9 @@ function Strokes.new(options)
         local support_movement=support and delta(support,state.raw_support)
         local support_distance=support_movement and length(support_movement) or 0
         local raw_speed=dt>0 and math.max(raw_distance,support_distance)/dt or 0
+        -- Settling watches the weapon hand only: a shield or free hand moving
+        -- through a fight must not keep the weapon from arming.
+        local hand_speed=dt>0 and raw_distance/dt or 0
         local distance=length(movement)
         local speed=dt>0 and distance/dt or 0
         local direction=distance>0 and unit(movement,distance) or nil
@@ -108,40 +121,65 @@ function Strokes.new(options)
             state.output=snapshot("no_attack_intent"); return state.output
         end
         local committed=false
+        -- Recovery is not a gate. It weakens the weapon's muscles (inertia),
+        -- so reaching stroke speed again soon takes a real swing, and more
+        -- of one the heavier the weapon. Only the native action decides.
+        local ready=request.native_ready==true
         local function candidate()
             return {origin={point[1]-movement[1],point[2]-movement[2],point[3]-movement[3]},
                 raw_origin={raw[1]-raw_movement[1],raw[2]-raw_movement[2],raw[3]-raw_movement[3]},raw_path=raw_distance,
                 support_origin=support and {support[1]-support_movement[1],support[2]-support_movement[2],support[3]-support_movement[3]},
                 support_path=support_distance,
                 trajectory={{point[1]-movement[1],point[2]-movement[2],point[3]-movement[3]},copy(point)},
-                start=time-dt,path=distance,allowed=remaining()<=0 and request.native_ready==true}
+                start=time-dt,path=distance,allowed=ready}
+        end
+        -- A motion begun during recovery counts from the sample where the
+        -- weapon became ready. Nothing travelled before it is swept or
+        -- banked, and a motion that ends first never fires.
+        local function rebase(value)
+            value.origin=copy(point); value.raw_origin=copy(raw); value.raw_path=0
+            value.support_origin=support and copy(support); value.support_path=0
+            value.trajectory={copy(point)}; value.start=time; value.path=0; value.allowed=true
+        end
+        -- A sharp turn or a stop separates swings; the next one may start in
+        -- any new direction at least 60 degrees from the last, not only back.
+        local function next_swing(previous)
+            return direction and speed>=config.speed and raw_speed>=config.raw_speed and previous and dot(direction,previous)<.5
         end
         if state.active then
             local active=state.active
             local alignment=direction and dot(direction,active.direction) or 1
-            if not direction or speed<config.stop_speed or alignment<.25 or
+            -- A big swing is an arc: its heading keeps turning, past 75 degrees
+            -- from the committed direction well before the weapon comes round
+            -- to a target, and a 150 degree arc ends about 135 degrees from
+            -- it. Follow the turn frame to frame; a sharp turn, or heading back
+            -- against the committed direction, still ends the stroke.
+            local turn=direction and dot(direction,active.heading or active.direction) or 1
+            if not direction or speed<config.stop_speed or turn<.25 or alignment<-.9 or
                     time-active.start>config.max_active then
                 state.active=nil; state.phase="spent"; state.quiet=0
+                state.ended={serial=state.serial,onset=active.onset}
                 state.spent_direction=direction or active.direction
-                if direction and speed>=config.speed and raw_speed>=config.raw_speed and alignment<-.35 then
+                if next_swing(active.heading or active.direction) then
                     state.candidate=candidate(); state.phase="candidate"
                 end
-            end
+            else active.heading=direction end
         elseif state.phase=="spent" then
-            state.quiet=raw_speed<config.stop_speed and state.quiet+dt or 0
+            state.quiet=hand_speed<config.stop_speed and state.quiet+dt or 0
             if state.quiet>=config.settle then state.phase="armed"
-            elseif direction and speed>=config.speed and raw_speed>=config.raw_speed and state.spent_direction and
-                    dot(direction,state.spent_direction)<-.35 then
+            elseif next_swing(state.spent_direction) then
                 state.candidate=candidate(); state.phase="candidate"
             end
         elseif state.phase=="settling" then
-            state.quiet=raw_speed<config.stop_speed and state.quiet+dt or 0
+            state.quiet=hand_speed<config.stop_speed and state.quiet+dt or 0
             if state.quiet>=config.settle then state.phase="armed" end
         elseif state.phase=="armed" and speed>=config.speed and raw_speed>=config.raw_speed then
             -- Capture readiness at motion onset. A rejected motion cannot be
             -- banked and released as an attack when its cooldown expires.
             state.candidate=candidate()
             state.phase="candidate"
+        elseif state.phase=="candidate" and ready and not state.candidate.allowed then
+            rebase(state.candidate)
         elseif state.phase=="candidate" then
             local candidate=state.candidate
             candidate.trajectory[#candidate.trajectory+1]=copy(point)
@@ -149,7 +187,7 @@ function Strokes.new(options)
             candidate.path=candidate.path+distance
             candidate.raw_path=candidate.raw_path+raw_distance
             candidate.support_path=candidate.support_path+support_distance
-            candidate.allowed=candidate.allowed and request.native_ready==true
+            candidate.allowed=candidate.allowed and ready
             local net=delta(point,candidate.origin)
             local travel=length(net)
             local coherent=travel/math.max(candidate.path,1e-12)
@@ -164,16 +202,22 @@ function Strokes.new(options)
                 state.candidate=nil; state.phase="spent"; state.quiet=0
                 state.spent_direction=direction or state.spent_direction
             elseif travel>=config.travel and raw_qualified and
-                    time-candidate.start>=config.duration and speed>=config.speed then
-                state.candidate=nil
-                if candidate.allowed and remaining()<=0 then
+                    time-candidate.start>=config.duration and speed>=config.speed and
+                    (candidate.allowed or not candidate.reported) then
+                if candidate.allowed then
+                    state.candidate=nil
                     state.serial=state.serial+1; state.debt=1
-                    state.active={start=time,direction=unit(net,travel),targets={},
+                    -- onset: the sample the qualifying motion started from. The
+                    -- stroke commits only after it has travelled, so the
+                    -- runtime queries the path back to here once native binds.
+                    state.active={start=time,onset=candidate.start,direction=unit(net,travel),targets={},
                         trajectory=candidate.trajectory,
                         intent_hand=dominant_qualified and (support_qualified and "both" or "dominant") or "support"}
                     state.phase="active"; committed=true
                 else
-                    state.phase="spent"; state.quiet=0; state.spent_direction=direction
+                    -- Reported once; the motion stays a candidate in case the
+                    -- weapon becomes ready before it ends.
+                    candidate.reported=true
                     state.output=snapshot("suppressed_candidate")
                     state.output.suppressed_candidate={time=time,duration=time-candidate.start,speed=speed,
                         travel=travel,raw_travel=raw_travel,coherence=coherent,

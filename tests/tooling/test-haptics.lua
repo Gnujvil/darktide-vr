@@ -170,18 +170,25 @@ do
     assert(pulses[3][1] == 3 and math.abs(pulses[3][2] - Haptics.KINDS.push.amplitude * Haptics.MISSED_PUSH_SCALE) < 1e-6)
     hit({_player_unit = local_unit}, {}, nil) -- a missing profile is a light hit, not an error
     assert(#pulses == 4)
+    -- A connecting hit and a shove are feedback in either mode (user, 21
+    -- October: melee hits gave no vibration at all).
+    mode = "informative"
+    hit({_player_unit = local_unit}, {}, {melee_attack_strength = "light"})
+    shove({_player_unit = local_unit}, 1)
+    assert(#pulses == 6, "informative mode dropped a melee hit or shove")
+    mode = "immersive"
     -- Menu sounds: both modes, and only while the VR pointer owns menus.
     local sound = hook("UIManager", "play_2d_sound")
     assert(sound, "UI sound hook")
     sound({}, "wwise/events/ui/play_ui_mouseover")
-    assert(#pulses == 5 and pulses[5][1] == 2 and pulses[5][2] == Haptics.KINDS.menu_hover.amplitude,
+    assert(#pulses == 7 and pulses[7][1] == 2 and pulses[7][2] == Haptics.KINDS.menu_hover.amplitude,
         "menu hover tick in immersive mode")
     mode = "informative"
     sound({}, "wwise/events/ui/play_ui_click")
-    assert(#pulses == 6 and pulses[6][2] == Haptics.KINDS.menu_confirm.amplitude, "menu confirm tick")
+    assert(#pulses == 8 and pulses[8][2] == Haptics.KINDS.menu_confirm.amplitude, "menu confirm tick")
     native_menu = false
     sound({}, "wwise/events/ui/play_ui_click")
-    assert(#pulses == 6, "menu tick without the VR pointer")
+    assert(#pulses == 8, "menu tick without the VR pointer")
     Managers = nil
 end
 

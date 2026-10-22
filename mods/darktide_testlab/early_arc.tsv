@@ -1,0 +1,9 @@
+# Horizontal light swing that starts 0.2 m right of a target spawned straight ahead.
+# The weapon overlaps the target only during the first ~0.25 m of the 1.2 m arc.
+# t left_xyz left_xyzw right_xyz right_xyzw primary block left_grip right_grip
+0.00 -0.25 0.30 -0.35 0 0 0 1 0.20 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0
+0.15 -0.25 0.30 -0.35 0 0 0 1 0.20 0.45 -0.30 -0.70710678 0 0 0.70710678 1 0 0 0
+0.25 -0.25 0.30 -0.35 0 0 0 1 0.20 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0
+0.35 -0.25 0.30 -0.35 0 0 0 1 0.20 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0
+0.70 -0.25 0.30 -0.35 0 0 0 1 1.40 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0
+1.00 -0.25 0.30 -0.35 0 0 0 1 1.40 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0

@@ -65,6 +65,15 @@ for frame=11,18 do assert(not sample(frame,pose(.3+(frame-10)*.04),pose(.3)).pus
 detector.reset()
 for frame=0,10 do sample(frame,pose(.3)) end
 for frame=11,18 do assert(not sample(frame,pose(.3+(frame-10)*.04),nil,true,false).push,'shove bypassed native readiness') end
+-- A held guard tolerates drift at the edge of the pose box: a borderline
+-- shield must not restart the native block, and its animation, every frame.
+detector.reset()
+assert(sample(0,pose(.3,.2,-.66)).pressed)
+for frame=1,20 do
+    local current=sample(frame,pose(.3,.2,-.66-(frame%2)*.08))
+    assert(current.blocking and not current.released,'edge drift dropped a held guard')
+end
+assert(sample(21,pose(.3,.2,-1)).released,'lowering the shield did not release the guard')
 local allow=true
 local template={action_inputs={block={input_sequence={{input='action_two_hold',value=true}}},
     push={input_sequence={{input='action_one_pressed',hold_input='action_two_hold',value=true}}}},

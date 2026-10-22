@@ -176,10 +176,13 @@ do
             self._first_person_component.rotation==head_rotation and point=='front'
     end
     presentation.eye_pose=function(unit) assert(unit==nil);return head_position,head_rotation end
+    -- Physical melee is decided by the weapon's own contact, regardless of
+    -- head gaze (docs/TRACKED-MELEE-DESIGN.md). The stock cone is +-32.5
+    -- degrees vertically: in VR it dropped hits on a body in plain view.
     presentation.physical_melee.update_sweep=function(self)
         assert(self._first_person_component==component,'physical view changed shared pose/sweep origin')
         assert(self._first_person_extension:is_within_default_view('front'),'tracked visible contact rejected')
-        assert(not self._first_person_extension:is_within_default_view('behind'),'native view rejection bypassed')
+        assert(self._first_person_extension:is_within_default_view('behind'),'weapon contact rejected by head gaze')
         assert(self._first_person_extension:unrelated_method()==9)
         return true
     end

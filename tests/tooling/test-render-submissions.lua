@@ -4,6 +4,8 @@ local last=assert(text:find('    if world == ui_stereo_world and ui_stereo_spawn
 local branch=text:sub(begin,last-1)
 local function run(single,reverse,timing,direct)
     local calls,arms,captures,waits,logs=0,{},0,0,0
+    -- The second-eye world update guard: armed only around the second render.
+    local guarded,armed_calls=false,{}
     local first,second={},{}
     local world={}
     local env=setmetatable({active_world=world,active=true,ui_native_capture_active=true,
@@ -13,6 +15,7 @@ local function run(single,reverse,timing,direct)
         presentation={single_submission_probe_requested=single,
             reverse_eye_order_probe_requested=reverse,
             update_performance_pass_trace=function()end,
+            arm_second_eye_world_update=function(armed) guarded=armed end,
             trace_body_capture_boundary=function()end},
         mod={info=function() logs=logs+1 end},
         ScriptWorld={viewport=function(_,name)return name=='left' and first or second end,
@@ -28,7 +31,11 @@ local function run(single,reverse,timing,direct)
     },{__index=_G})
     local chunk=assert(loadstring('return function(world,func,...)\n'..branch..'\nend'))
     setfenv(chunk,env); local hook=chunk()
-    for _=1,2 do assert(hook(world,function()calls=calls+1;return 'stock_result' end)=='stock_result') end
+    for _=1,2 do assert(hook(world,function()calls=calls+1;armed_calls[calls]=guarded;return 'stock_result' end)=='stock_result') end
+    assert(not guarded,'second-eye guard left armed after the frame')
+    for i,armed in ipairs(armed_calls) do
+        assert(armed==(not single and i%2==0),'second-eye guard armed around the wrong render')
+    end
     assert(calls==(single and 2 or 4))
     assert(#arms==calls and captures==(direct and calls or 0) and waits==(direct and 0 or calls))
     for i,eye in ipairs(arms) do

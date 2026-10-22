@@ -11,13 +11,15 @@ function Defense.guard_role(template)
     if name=="powermaul_shield_p1_m1" or name=="powermaul_shield_p1_m2" then return "support" end
     return "dominant"
 end
-local function guard(pose)
+-- margin widens every limit for a guard already held, so a shield at the
+-- edge of the box does not restart the native block each time it crosses.
+local function guard(pose,margin)
     if not pose then return false end
     local p,q=pose.position,pose.rotation
     -- Body origin is the recentered head; +Y is forward, +Z is up.
     local shaft_y=2*(q[2]*q[3]-q[4]*q[1])
-    return math.abs(p[1])<=.85 and p[2]>=.15 and p[2]<=.95 and
-        p[3]>=-.70 and p[3]<=.15 and math.abs(shaft_y)<=.70
+    return math.abs(p[1])<=.85+margin and p[2]>=.15-margin and p[2]<=.95+margin and
+        p[3]>=-.70-margin and p[3]<=.15+margin and math.abs(shaft_y)<=.70+margin
 end
 local function copy(p) return {p[1],p[2],p[3]} end
 local function distance(a,b)
@@ -30,7 +32,8 @@ function Defense.new()
     function api.update(request)
         if state.frame==request.frame and state.time==request.time then return state.output end
         local dt=state.time and request.time-state.time
-        local blocking=request.intent==true and guard(request.raw) and guard(request.virtual)
+        local margin=state.blocking==true and .15 or 0
+        local blocking=request.intent==true and guard(request.raw,margin) and guard(request.virtual,margin)
         local pose_only=request.pose_only==true
         if pose_only then
             local continuous=dt and dt>0 and dt<=.1 and state.pose_only==true

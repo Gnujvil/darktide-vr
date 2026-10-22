@@ -40,6 +40,19 @@ assert(SightAds.engaged(true,.01,.25,math.cos(math.rad(30))),'a small glance kee
 assert(not SightAds.engaged(false,.01,-.05,1),'eye in front of the grip (gun behind the head)')
 assert(not SightAds.engaged(false,.01,.8,1),'too far behind')
 assert(not SightAds.engaged(false,0/0,.25,1))
+-- Either eye: the headset eye centre moved half an IPD each way. The gun
+-- may be raised to the off eye, or a cross-dominant one.
+local centre,head_right,head_forward={0,-.25,.118},{1,0,0},{0,1,0}
+local half=SightAds.SIGHT_EYE_OFFSET
+local engaged,eye=SightAds.either_eye(false,{-half,0,0},forward,up,right,offset,centre,head_right,head_forward)
+assert(engaged and eye=='left','sights at the left eye did not aim')
+engaged,eye=SightAds.either_eye(false,{half,0,0},forward,up,right,offset,centre,head_right,head_forward)
+assert(engaged and eye=='right','sights at the right eye did not aim')
+engaged=SightAds.either_eye(false,{.12,0,0},forward,up,right,offset,centre,head_right,head_forward)
+assert(not engaged,'sights beside both eyes aimed')
+engaged=SightAds.either_eye(true,{-half-.08,0,0},forward,up,right,offset,centre,head_right,head_forward)
+assert(engaged,'a held aim dropped inside the exit distance of the left eye')
+assert(not SightAds.either_eye(false,{0,0,0},forward,up,right,offset,nil,head_right,head_forward),'missing eye aimed')
 -- Input edges: hold and toggle.
 local p,h,r=SightAds.edges(false,true,false); assert(p and h and not r,'hold: enter')
 p,h,r=SightAds.edges(true,true,false); assert(not p and h and not r,'hold: stay')

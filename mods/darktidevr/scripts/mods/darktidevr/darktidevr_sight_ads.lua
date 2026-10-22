@@ -1,13 +1,13 @@
--- Sight-to-eye aim down sights (option "vr_sight_ads", default off; backlog
--- item, 15 September): bringing a gun's sight line to the dominant eye holds
--- the alternate-fire input, and moving it away lets go. Only for guns whose
--- alternate is the stock aim (Support.ads_supported). The player's own
--- trigger keeps working alongside.
+-- Sight-to-eye aim down sights (option "vr_sight_ads", default on since 20
+-- October; backlog item, 15 September): bringing a gun's sight line to either
+-- eye holds the alternate-fire input, and moving it away lets go. Only for
+-- guns whose alternate is the stock aim (Support.ads_supported). The
+-- player's own trigger keeps working alongside.
 --
 -- The sight line comes from darktidevr_gun_sights: it runs parallel to the
--- aim, offset from the grip in the muzzle frame. The eye is the headset eye
--- (first-person camera) moved SIGHT_EYE_OFFSET toward the gun hand's side,
--- on the assumption that the dominant eye is on the dominant hand's side.
+-- aim, offset from the grip in the muzzle frame. The eyes are the headset eye
+-- (first-person camera) moved SIGHT_EYE_OFFSET to each side: a player may
+-- sight with the off eye, or be cross-dominant (user, 20 October).
 local SightAds = {}
 
 SightAds.SIGHT_EYE_OFFSET = 0.032
@@ -59,6 +59,23 @@ function SightAds.engaged(was_engaged, distance, behind, facing)
         return distance <= SightAds.EXIT_DISTANCE and facing >= SightAds.EXIT_FACING
     end
     return distance <= SightAds.ENTER_DISTANCE and facing >= SightAds.ENTER_FACING
+end
+
+-- Whether the sights are at either eye: the headset eye centre moved
+-- SIGHT_EYE_OFFSET each way. A player may aim with the off eye, or be
+-- cross-dominant (user, 20 October). Returns engaged and which eye. Pure.
+function SightAds.either_eye(was_engaged, grip, forward, up, right, offset, centre, head_right, head_forward)
+    if not valid3(centre) or not valid3(head_right) then return false end
+    local side, nearest
+    for _, eye_side in ipairs({"left", "right"}) do
+        local s = eye_side == "left" and -SightAds.SIGHT_EYE_OFFSET or SightAds.SIGHT_EYE_OFFSET
+        local eye = {centre[1] + head_right[1] * s, centre[2] + head_right[2] * s, centre[3] + head_right[3] * s}
+        local distance, behind, facing = SightAds.measure(grip, forward, up, right, offset, eye, head_forward)
+        if SightAds.engaged(was_engaged, distance, behind, facing) and (not nearest or distance < nearest) then
+            side, nearest = eye_side, distance
+        end
+    end
+    return side ~= nil, side, nearest
 end
 
 -- Engaged after the release grace: stays engaged until the sights have been
@@ -123,11 +140,9 @@ function SightAds.install(mod, presentation, observation)
         if presentation.eye_pose then eye_position, head = presentation.eye_pose(unit) end
         if not grip or not aim or not eye_position or not head then return false end
         local dominant = presentation.weapon_hand_roles.physical("dominant")
-        local side = dominant == "left" and -1 or 1
-        local eye = eye_position + Quaternion.right(head) * (SightAds.SIGHT_EYE_OFFSET * side)
-        local distance, behind, facing = SightAds.measure(vector(grip), vector(Quaternion.forward(aim)),
-            vector(Quaternion.up(aim)), vector(Quaternion.right(aim)), offset, vector(eye), vector(Quaternion.forward(head)))
-        local at_eye = SightAds.engaged(api.engaged, distance, behind, facing)
+        local at_eye, eye_side, distance = SightAds.either_eye(api.engaged, vector(grip), vector(Quaternion.forward(aim)),
+            vector(Quaternion.up(aim)), vector(Quaternion.right(aim)), offset, vector(eye_position),
+            vector(Quaternion.right(head)), vector(Quaternion.forward(head)))
         local now = Managers.time and Managers.time:time("main") or 0
         local dt = api.last_t and now - api.last_t or 0
         api.last_t = now
@@ -136,8 +151,8 @@ function SightAds.install(mod, presentation, observation)
         if test_enabled then
             test_frames = test_frames + 1
             if test_frames % 90 == 1 then
-                mod:info("DARKTIDEVR_SIGHT_ADS measure template=%s distance_m=%s behind_m=%s facing=%s engaged=%s",
-                    template.name, tostring(distance), tostring(behind), tostring(facing), tostring(engaged))
+                mod:info("DARKTIDEVR_SIGHT_ADS measure template=%s eye=%s distance_m=%s engaged=%s",
+                    template.name, tostring(eye_side), tostring(distance), tostring(engaged))
             end
         end
         if engaged and not api.engaged then
@@ -147,8 +162,8 @@ function SightAds.install(mod, presentation, observation)
                 pcall(presentation.haptics.pulse, dominant, "zone", Managers.time and Managers.time:time("main") or 0)
             end
             if api.entries <= 10 then
-                mod:info("DARKTIDEVR_SIGHT_ADS enter template=%s distance_m=%.3f behind_m=%.3f facing=%.3f entries=%d",
-                    template.name, distance, behind, facing, api.entries)
+                mod:info("DARKTIDEVR_SIGHT_ADS enter template=%s eye=%s distance_m=%.3f entries=%d",
+                    template.name, tostring(eye_side), distance or -1, api.entries)
             end
         end
         return engaged

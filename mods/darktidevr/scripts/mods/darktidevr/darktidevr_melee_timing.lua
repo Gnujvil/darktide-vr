@@ -175,15 +175,18 @@ function Timing.live(extension,slot,t,committed_action)
     local time_in_action=t-(component.start_t or t)
     result.ready=handler:_validate_action(template.actions[windup],params,t,time_in_action,nil) and
         handler:_validate_action(template.actions[result.light_action],params,t,time_in_action,nil)
+    -- Seconds until the chain window opens (0 when ready), nil when unknown.
+    result.ready_in=result.ready and 0 or nil
     if current and current.kind~="windup" then
         local chain=current.allowed_chain_actions and current.allowed_chain_actions.start_attack
-        if not chain or chain.chain_until or chain.running_action_state_requirement or #chain>0 then result.ready=false
+        if not chain or chain.chain_until or chain.running_action_state_requirement or #chain>0 then result.ready=false;result.ready_in=nil
         else
             local factor=scale(current)
             if not finite(factor) or factor<=0 then return nil,"invalid_timing" end
             local threshold=chain.chain_time or 0
             if not finite(threshold) or threshold<0 then return nil,"invalid_timing" end
             threshold=factor<1 and inverted and inverted[current.kind] and threshold*factor or threshold/factor
+            result.ready_in=result.ready_in and math.max(0,threshold-time_in_action)
             result.ready=result.ready and time_in_action>=threshold
         end
     end
@@ -316,7 +319,7 @@ local function animation_path(template,settings,loader)
     if type(box)~="table" or not finite(box[3]) or box[3]<=0 then return nil end
     local cached=shape_cache[settings]
     if cached and cached.path==path and cached.start==settings.damage_window_start and
-            cached.stop==settings.damage_window_end and cached.length==box[3] then return cached.points end
+            cached.stop==settings.damage_window_end and cached.length==box[3] then return cached.points,cached.reach,cached.bounds end
     local data=animation_cache[path]
     if data==nil then
         local ok,value=pcall(loader,path)
@@ -345,8 +348,35 @@ local function animation_path(template,settings,loader)
         points[#points+1]={matrix[13]+matrix[9]*offset,matrix[14]+matrix[10]*offset,matrix[15]+matrix[11]*offset}
     end
     local normalized=normalized_path(points)
-    if normalized then shape_cache[settings]={path=path,start=start,stop=stop,length=box[3],points=normalized} end
-    return normalized
+    -- The furthest the authored tip gets from the first-person origin, and
+    -- the tip's bounds over the damage window (x right, y forward, z up).
+    local reach=0
+    local bounds={math.huge,-math.huge,math.huge,-math.huge,math.huge,-math.huge}
+    for _,point in ipairs(points) do
+        reach=math.max(reach,math.sqrt(point[1]^2+point[2]^2+point[3]^2))
+        for axis=1,3 do
+            bounds[axis*2-1]=math.min(bounds[axis*2-1],point[axis]);bounds[axis*2]=math.max(bounds[axis*2],point[axis])
+        end
+    end
+    if normalized then shape_cache[settings]={path=path,start=start,stop=stop,length=box[3],points=normalized,reach=reach,bounds=bounds} end
+    return normalized,normalized and reach or nil,normalized and bounds or nil
+end
+-- The authored tip path of one sweep action, 8 points from the origin over
+-- unit length in its first-person axes, the tip's furthest distance from the
+-- first-person origin (the attack's reach), and the tip's bounds
+-- {xmin,xmax,ymin,ymax,zmin,zmax} over the damage window, or nil.
+function Timing.authored_path(template,settings,loader)
+    if type(template)~="table" or type(settings)~="table" then return nil end
+    return animation_path(template,settings,loader or dofile)
+end
+-- A weapon input the stock parser has queued and not yet consumed. Pressing
+-- again while one waits would only replace or drop it.
+function Timing.input_queued(extension)
+    local handler=extension and extension._action_handler
+    local parser=handler and handler._action_input_extension
+    if not parser or type(parser.peek_next_input)~="function" then return false end
+    local ok,queued=pcall(parser.peek_next_input,parser,"weapon_action")
+    return ok and queued~=nil
 end
 -- Match authored weapon-tip paths in the same body-local axes as the weighted
 -- stroke. Translation, reach and sampling rate do not bias damage selection.

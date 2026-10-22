@@ -279,4 +279,27 @@ template={keywords={'ranged','force_staff'}}
 fresh(44,0,1); rules.capture(h,44)
 assert(h._input_cache[7][44]==0,'Melee roll leaked into staff aim')
 assert(math.abs(h._input_cache[5][44]-.7)<1e-12 and math.abs(h._input_cache[6][44]-.2)<1e-12)
+-- A tracked swing's attack sends its own orientation while it runs; the
+-- movement intent keeps its world direction in that sent basis.
+template={keywords={'melee'}}; running=nil
+local latched
+presentation.melee_gesture_orientation=function(unit,t)
+    assert(unit=='local' and t==7)
+    if latched then return latched[1],latched[2],latched[3] end
+end
+hand={yaw=.7,pitch=.2,roll=math.pi/2}
+latched={1.1,-.3,2.5}
+fresh(50,0,1); rules.capture(h,50,0,7)
+c=h._input_cache
+assert(math.abs(c[5][50]-1.1)<1e-12 and math.abs(c[6][50]-(2*math.pi-.3))<1e-12 and c[7][50]==2.5,
+    'swing orientation not sent')
+world=Quaternion.rotate(c[5][50],Vector3(c[1][50]-c[2][50],c[3][50]-c[4][50],0))
+assert(math.abs(world[1])<.0002 and math.abs(world[2]-1)<.0002,'swing yaw turned the movement')
+latched={1.1,-.3,nil}
+fresh(51,0,1); rules.capture(h,51,0,7)
+assert(math.abs(h._input_cache[5][51]-1.1)<1e-12 and h._input_cache[7][51]==math.pi/2,'a thrust lost the wrist roll')
+latched=nil
+fresh(52,0,1); rules.capture(h,52,0,7)
+assert(math.abs(h._input_cache[5][52]-.7)<1e-12,'no swing still overrode the hand aim')
+presentation.melee_gesture_orientation=nil
 print('PASS: range rules, frame aim, movement basis/packing, pitch limits, stock fallbacks and session setting')

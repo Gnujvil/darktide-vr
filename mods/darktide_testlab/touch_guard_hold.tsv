@@ -1,0 +1,9 @@
+# grip=touch
+# The guard_hold.tsv motion as a Touch controller reports it: each rotation is the raw grip,
+# turned +90 degrees about X from the weapon hilt the original scenario authors.
+# Hold the already-tested native guard pose, without shove or attack intent.
+# Arm a bounded threat episode after the guard settles. Native attacks decide outcomes.
+0.00 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 0.2 0.3 -0.3 0.70710678 0 0 0.70710678 0 0 0 0
+0.20 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 0.2 0.3 -0.3 0.70710678 0 0 0.70710678 0 1 0 0
+8.00 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 0.2 0.3 -0.3 0.70710678 0 0 0.70710678 0 1 0 0
+8.20 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 0.2 0.3 -0.3 0.70710678 0 0 0.70710678 0 0 0 0

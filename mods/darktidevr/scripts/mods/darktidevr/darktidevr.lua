@@ -931,6 +931,8 @@ local function ensure_ui_native_hooks()
         int dtvr_request_haptic_v1(int hands, float amplitude, int duration_ms,
             float frequency_hz);
         int dtvr_backup_user_settings(void);
+        int dtvr_arm_second_eye_world_update(int action);
+        unsigned long long dtvr_second_eye_world_update_count(int kind);
     ]])
 
     local ok, library = pcall(
@@ -1025,6 +1027,27 @@ local function ensure_ui_native_hooks()
     end
 
     ui_native_capture = library
+    -- Each eye's Application.render_world updates the world first. Between
+    -- the eyes that update must leave the particle world alone, or the second
+    -- eye renders particle effects it has just freed: the stereo crash of 19
+    -- and 20 October (second_eye_world_update.cpp). The flag's "disabled"
+    -- only counts those updates, for a comparison.
+    do
+        local disabled = false
+        local flag = Mods.lua.io.open(
+            "./../mods/darktidevr/darktidevr_second_eye_world_update.flag", "r")
+        if flag then
+            disabled = flag:read("*all"):match("^%s*disabled%s*$") ~= nil
+            flag:close()
+        end
+        local available = presentation.native_export(library,
+            "dtvr_arm_second_eye_world_update") and
+            library.dtvr_arm_second_eye_world_update(0) == 1
+        presentation.second_eye_world_update_guard = available and
+            (disabled and 2 or 1) or nil
+        mod:info("DARKTIDEVR_STEREO second_eye_world_update guard=%s",
+            not available and "unavailable" or disabled and "observe_only" or "active")
+    end
     do
         -- This optional readback does not select startup hooks. It requires the
         -- separate census mode, whose bootstrap/Lua agreement is already gated.
@@ -3522,6 +3545,15 @@ local function report_native_observer()
             tonumber(ui_native_capture.dtvr_boundary_tag_queue_depth()),
             tonumber(ui_native_capture.dtvr_boundary_tag_reset_count())
         )
+        if presentation.second_eye_world_update_guard then
+            mod:info(
+                "DARKTIDEVR_STEREO second_eye_world_update kept_off_particles=%d sent_changes=%d unchanged=%d unconsumed=%d",
+                tonumber(ui_native_capture.dtvr_second_eye_world_update_count(0)),
+                tonumber(ui_native_capture.dtvr_second_eye_world_update_count(2)),
+                tonumber(ui_native_capture.dtvr_second_eye_world_update_count(3)),
+                tonumber(ui_native_capture.dtvr_second_eye_world_update_count(1))
+            )
+        end
         if ui_alternating_full_requested then
             mod:info(
                 "DARKTIDEVR_STEREO alternating tags=%d copies=%d/%d capture_result=%d",
@@ -3939,6 +3971,16 @@ local function record_render_timings(label, left_ticks, right_ticks, pair_ticks)
             )
         end
         reset_render_timings(label)
+    end
+end
+
+-- Brackets every second-eye render of a world already rendered this frame.
+-- An error inside leaves it armed until the next disarm, which only keeps one
+-- more world update off the particle world.
+function presentation.arm_second_eye_world_update(armed)
+    local action = presentation.second_eye_world_update_guard
+    if action then
+        ui_native_capture.dtvr_arm_second_eye_world_update(armed and action or 0)
     end
 end
 
@@ -15094,12 +15136,14 @@ if presentation.stock_queue_capture_requested then
                 end
             end
             if ui_reset_dlss_each_eye_requested then Application.reset_dlss() end
+            if eye==1 then presentation.arm_second_eye_world_update(true) end
             local target=tonumber(ui_native_capture.dtvr_boundary_eye_capture_count(eye))+1
             report_native_capture_result(arm_eye_capture(eye))
             presentation.trace_body_capture_boundary(eye==0 and "before_left" or "before_right")
             return target
         end,
         after_eye=function(eye,target)
+            if eye==1 then presentation.arm_second_eye_world_update(false) end
             if ui_direct_swapchain_capture_requested then
                 report_native_capture_result(ui_native_capture.dtvr_capture_armed_swapchain_eye(eye))
             elseif ui_native_sync_requested then
@@ -15280,10 +15324,12 @@ mod:hook(ScriptWorld, "render", function(func, world, ...)
         ) + 1
         report_native_capture_result(arm_eye_capture(second_eye))
         local right_start = performance_tick()
+        presentation.arm_second_eye_world_update(true)
         if not render_eye_from_prepared_frame(
                 world, first, second) then
             func(world, ...)
         end
+        presentation.arm_second_eye_world_update(false)
         local right_end = performance_tick()
         presentation.trace_body_capture_boundary("after_right")
         if ui_direct_swapchain_capture_requested then
@@ -15347,10 +15393,12 @@ mod:hook(ScriptWorld, "render", function(func, world, ...)
         ) + 1
         report_native_capture_result(arm_eye_capture(1))
         local right_start = performance_tick()
+        presentation.arm_second_eye_world_update(true)
         if not render_eye_from_prepared_frame(
                 world, primary, right) then
             func(world, ...)
         end
+        presentation.arm_second_eye_world_update(false)
         local right_end = performance_tick()
         if ui_direct_swapchain_capture_requested then
             report_native_capture_result(
@@ -15389,7 +15437,9 @@ mod:hook(ScriptWorld, "render", function(func, world, ...)
 
         ScriptWorld.deactivate_viewport(world, primary)
         ScriptWorld.activate_viewport(world, right)
+        presentation.arm_second_eye_world_update(true)
         local right_ok, right_error = pcall(func, world, ...)
+        presentation.arm_second_eye_world_update(false)
 
         -- Restore the normal active set for update code outside this hook.
         ScriptWorld.activate_viewport(world, primary)
@@ -15897,6 +15947,8 @@ presentation.controller_aim = mod:io_dofile(
 )
 presentation.controller_aim.install(
     mod, presentation, controller_observation)
+-- The physical melee contact rule, for desktop replays of the same owner.
+mod.with_physical_contact = presentation.controller_aim.with_physical_contact
 
 presentation.projectile_visual = mod:io_dofile(
     "darktidevr/scripts/mods/darktidevr/darktidevr_projectile_visual"
@@ -16493,7 +16545,7 @@ mod:io_dofile(
 presentation.weapon_assist = mod:io_dofile(
     "darktidevr/scripts/mods/darktidevr/darktidevr_weapon_assist"
 ).install(mod,presentation,controller_observation)
--- Controller vibration (option vr_haptics_mode, default off): an older capture
+-- Controller vibration (option vr_haptics_mode, default immersive): an older capture
 -- library without the export drops every pulse.
 presentation.haptics = mod:io_dofile(
     "darktidevr/scripts/mods/darktidevr/darktidevr_haptics"

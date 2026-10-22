@@ -39,11 +39,12 @@ do
     local duplicate=owner.update(request)
     assert(not duplicate.committed and owner.status().remaining==debt,'duplicate frame advanced cadence')
     step(); assert(not owner.claim({},1),'stationary overlap retained collision permission')
+    -- No cooldown: a deliberate follow-up commits at once. Recovery is still
+    -- owed, as weaker muscles in the inertial weapon.
     settle(8); swing(.4,8)
-    settle(70)
-    assert(count()==1,'early motion was banked across recovery')
-    swing(.4)
-    assert(count()==2,'deliberate rearmed stroke did not commit')
+    assert(count()==2 and owner.status().recovery<1,'follow-up waited for a cooldown')
+    settle(70); swing(.4)
+    assert(count()==3,'deliberate rearmed stroke did not commit')
 end
 do
     local owner,request,step,settle,swing,count=fixture()
@@ -66,8 +67,8 @@ do
     request.reference={}; step(nil,.01)
     assert(owner.status().remaining>0 and not owner.status().collision_allowed)
     request.tracking_valid=false; step(nil,.01)
-    request.tracking_valid=true; settle(10); swing(.4)
-    assert(count()==1,'tracking/recenter reset erased debt')
+    request.tracking_valid=true; step(nil,.01)
+    assert(owner.status().remaining>0,'tracking/recenter reset erased recovery')
 end
 do
     local owner,request,step,settle,swing,count=fixture()
@@ -86,11 +87,19 @@ do
 end
 do
     local owner,request,step,settle,swing,count=fixture()
+    -- A swing that finishes while the weapon is not ready never fires later.
     settle(); request.native_ready=false; swing(.4); request.native_ready=true
-    for i=1,100 do step(.4+i*.03) end
+    settle(70)
     assert(count()==0,'native denial became delayed attack')
+    -- One still moving when the weapon becomes ready counts from that sample;
+    -- the path it travelled before is neither swept nor banked.
+    request.native_ready=false; swing(.2,4)
+    local ready_at=request.time
+    request.native_ready=true
+    for _=1,10 do step(request.point[1]+.03) end
+    assert(count()==1 and owner.status().onset>ready_at,'motion past readiness was lost or kept its denied path')
     settle(); request.guarding=true; swing(.4)
-    assert(count()==0,'guarding produced a strike')
+    assert(count()==1,'guarding produced a strike')
     request.guarding=false; request.interval=0; step()
     assert(not owner.status().collision_allowed,'invalid native interval accepted')
 end
@@ -120,6 +129,17 @@ for _,dt in ipairs({1/50,1/90,1/144,1/1000}) do
         end
     end
     assert(count==5,'sample rate altered deliberate stroke count: '..dt..' count='..count)
+end
+-- Real fights are erratic: the shield hand keeps moving, and the next swing
+-- turns away from the last one without the weapon ever stopping.
+do
+    local owner,request,step,settle,swing,count=fixture()
+    request.interval=.1
+    for i=1,12 do request.raw_support_point={.04*math.sin(i*.9),.04*math.cos(i*.9),0}; step() end
+    swing(.4)
+    assert(count()==1,'a moving shield hand kept the weapon from arming')
+    for _=1,20 do request.point={request.point[1],request.point[2]+.03,0}; step() end
+    assert(count()==2,'a swing turning away without stopping was lost')
 end
 -- Support intent is independent of dominant intent, never a sum of two
 -- alternating wiggles. Grip changes reset motion but cannot erase debt.
@@ -169,4 +189,32 @@ do
     end
     assert(count()==0 and reports==1,'suppressed-candidate observation changed admission or repeated')
 end
-print('melee_strokes=pass deliberate_motion whiff_recovery per_target 50hz_jitter stationary_overlap no_banking weapon_mode_reference tracking native_readiness live_speed duplicate_clock suppression_observation')
+-- A big swing is an arc. Collision must follow it past 75 degrees from the
+-- committed direction to where it meets a target; a reversal still ends it.
+for _,reverse in ipairs({false,true}) do
+    local owner=Strokes.new()
+    local request={time=0,frame=0,interval=.6,weapon={},mode='physical',reference={},
+        tracking_valid=true,intent=true,native_ready=true}
+    local function at(angle)
+        request.time=request.time+1/52;request.frame=request.frame+1
+        request.point={.7*math.cos(angle),.7*math.sin(angle),0};request.raw_point=request.point
+        return owner.update(request)
+    end
+    for _=1,10 do at(math.rad(150)) end
+    local committed,turned
+    for i=1,30 do
+        local angle=math.rad(150-150*i/30)
+        local result=at(angle)
+        if result.committed then committed=angle end
+        if committed and committed-angle>math.rad(110) and not turned then
+            turned=true
+            assert(result.collision_allowed,'curved swing lost collision part way round its arc')
+            if reverse then
+                assert(not at(angle+math.rad(4)).collision_allowed,'reversal kept the stroke active')
+                break
+            end
+        end
+    end
+    assert(committed and turned,'arc fixture did not commit and turn')
+end
+print('melee_strokes=pass deliberate_motion whiff_recovery per_target 50hz_jitter stationary_overlap no_banking weapon_mode_reference tracking native_readiness live_speed duplicate_clock suppression_observation curved_arc reversal_ends')

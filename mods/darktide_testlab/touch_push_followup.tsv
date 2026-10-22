@@ -1,0 +1,13 @@
+# grip=touch
+# The push_followup.tsv motion as a Touch controller reports it: each rotation is the raw grip,
+# turned +90 degrees about X from the weapon hilt the original scenario authors.
+# Guard plus primary intent, deliberate shove, settle inside native push chain, lateral follow-up.
+# t left_xyz left_xyzw right_xyz right_xyzw primary block left_grip right_grip
+0.00 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 0.2 0.3 -0.3 0.70710678 0 0 0.70710678 0 0 0 0
+0.20 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 0.2 0.3 -0.3 0.70710678 0 0 0.70710678 0 1 0 0
+1.00 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 0.2 0.3 -0.3 0.70710678 0 0 0.70710678 1 1 0 0
+1.25 -0.25 0.6 -0.35 0.70710678 0 0 0.70710678 0.2 0.6 -0.3 0.70710678 0 0 0.70710678 1 1 0 0
+1.55 -0.25 0.6 -0.35 0.70710678 0 0 0.70710678 0.2 0.6 -0.3 0.70710678 0 0 0.70710678 1 1 0 0
+1.80 -0.25 0.6 -0.35 0.70710678 0 0 0.70710678 -0.6 0.6 -0.3 0 0 0 1 1 1 0 0
+2.10 -0.25 0.6 -0.35 0.70710678 0 0 0.70710678 -0.6 0.6 -0.3 0 0 0 1 0 1 0 0
+2.40 -0.25 0.6 -0.35 0.70710678 0 0 0.70710678 -0.6 0.6 -0.3 0 0 0 1 0 0 0 0

@@ -53,9 +53,11 @@ Haptics.KINDS = {
     ability_used = {modes = {immersive = true}, amplitude = 0.6, duration_ms = 40},
     ability_ready = {modes = {informative = true}, notice = true, amplitude = 0.45, duration_ms = 30},
     blitz_ready = {modes = {informative = true}, notice = true, amplitude = 0.3, duration_ms = 15},
-    -- A melee swing connects (heavy attacks full strength); a shove.
-    melee_hit = {modes = {immersive = true}, amplitude = 0.8, duration_ms = 30},
-    push = {modes = {immersive = true}, amplitude = 0.6, duration_ms = 35},
+    -- A melee swing connects (heavy attacks full strength); a shove. Both
+    -- modes: a hit is the feel of the swing and the news that it landed
+    -- (user, 21 October: melee hits gave no vibration at all).
+    melee_hit = {modes = BOTH, amplitude = 0.8, duration_ms = 30},
+    push = {modes = BOTH, amplitude = 0.6, duration_ms = 35},
     -- Weapon heat and psyker peril: a warning past WARNING_SHARE, an alert
     -- past CRITICAL_SHARE. Charging a shot or attack: a buzz rising with the
     -- charge, and a tick when it is full.

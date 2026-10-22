@@ -13,6 +13,7 @@
 #include "producer/native_original_ring.h"
 #include "producer/engine_preparation_probe.h"
 #include "producer/cascade_stage_probe.h"
+#include "producer/second_eye_world_update.h"
 #include "producer/render_api_cpu_profile.h"
 #include "producer/resource_name_match.h"
 #include "producer/enhanced_barrier_interest.h"
@@ -14050,6 +14051,7 @@ int install_hooks(ID3D12Device* supplied_device = nullptr) {
     }
   }
   if (MH_Initialize() != MH_OK ||
+      !darktidevr::producer::install_second_eye_world_update_guard() ||
       !darktidevr::producer::install_cascade_stage_probe(native_capture_module, +[](std::uint64_t* present, std::uint64_t* generation) {
         *present = present_count.load(std::memory_order_relaxed);
         *generation = current_gameplay_generation.load(std::memory_order_acquire);
@@ -17471,6 +17473,22 @@ dtvr_boundary_tag_queue_depth() {
 extern "C" __declspec(dllexport) unsigned long long
 dtvr_boundary_tag_reset_count() {
   return boundary_tag_reset_count.load(std::memory_order_relaxed);
+}
+// action 0 disarms, 1 keeps the particle world off the next second-eye world
+// update, 2 only observes it. 1 when done, 0 when this game build has no
+// recognised update_world.
+extern "C" __declspec(dllexport) int dtvr_arm_second_eye_world_update(int action) {
+  if (action < 0 || action > 2) return 0;
+  return darktidevr::producer::arm_second_eye_world_update(
+      static_cast<darktidevr::producer::SecondEyeWorldUpdate>(action)) ? 1 : 0;
+}
+// kind: 0 kept off the particle world, 1 arms never consumed, 2 updates that
+// sent world changes, 3 updates with nothing to send.
+extern "C" __declspec(dllexport) unsigned long long
+dtvr_second_eye_world_update_count(int kind) {
+  if (kind < 0 || kind > 3) return 0;
+  return darktidevr::producer::second_eye_world_update_count(
+      static_cast<darktidevr::producer::SecondEyeWorldUpdateCount>(kind));
 }
 extern "C" __declspec(dllexport) int dtvr_boundary_last_capture_result() {
   return boundary_last_capture_result.load(std::memory_order_relaxed);

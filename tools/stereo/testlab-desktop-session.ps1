@@ -49,7 +49,7 @@ $chunks=@(Get-ChildItem -LiteralPath $modSource -Filter '*.lua' -Recurse -File |
 $chunks+=Join-Path $modSource 'darktide_testlab.mod'
 $canonical=@('darktidevr_melee_inertia.lua','darktidevr_melee_pose.lua','darktidevr_melee_strokes.lua',
     'darktidevr_melee_action_bridge.lua','darktidevr_melee_timing.lua','darktidevr_melee_volume.lua','darktidevr_melee_sweep_plan.lua',
-    'darktidevr_melee_runtime.lua','darktidevr_melee_defense.lua','darktidevr_melee_weapons.lua','darktidevr_melee_tether.lua')
+    'darktidevr_melee_runtime.lua','darktidevr_melee_defense.lua','darktidevr_melee_weapons.lua','darktidevr_melee_tether.lua','darktidevr_melee_grip.lua')
 foreach($name in $canonical) { $chunks+=Join-Path $repoRoot "mods/darktidevr/scripts/mods/darktidevr/$name" }
 & (Join-Path $repoRoot 'tools/lua/test-lua-syntax.ps1') -SourcePaths $chunks
 $nativeRoot=Join-Path $repoRoot 'build/melee-inertia'

@@ -208,7 +208,14 @@ function Rules.install(mod, presentation, state, mode_name)
         local old_yaw = cache[handler._yaw_index][index]
         local yaw, pitch, roll = Rules.orientation(rotation, old_yaw)
         if not finite(yaw) or not finite(pitch) or not finite(old_yaw) then return end
-        roll = melee_roll(unit, roll)
+        -- A tracked swing's attack keeps the orientation that lays its stock
+        -- path along the swing (darktidevr_melee_gesture_aim) while it runs.
+        local gesture_yaw, gesture_pitch, gesture_roll
+        if presentation.melee_gesture_orientation then
+            gesture_yaw, gesture_pitch, gesture_roll = presentation.melee_gesture_orientation(unit, t)
+        end
+        if finite(gesture_yaw) and finite(gesture_pitch) then yaw, pitch = gesture_yaw, gesture_pitch end
+        if finite(gesture_yaw) and finite(gesture_roll) then roll = gesture_roll else roll = melee_roll(unit, roll) end
         local limits = require("scripts/settings/player_character/player_orientation_settings").default
         yaw = yaw % (2*math.pi)
         pitch = (pitch+math.pi) % (2*math.pi)-math.pi

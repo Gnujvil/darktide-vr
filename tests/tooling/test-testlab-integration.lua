@@ -310,8 +310,12 @@ do
     assert(first=='native' and last==17 and files['results.tsv']:find('sticky_native_update',1,true),'sticky observer changed native call/returns')
 end
 hooks._update_sweep(function() error('physical run used authored collision window') end,action,.01,commit_t,0,action._action_settings)
+-- The binding frame also sweeps the stroke's motion since its onset; a
+-- duplicate native update in the same frame adds nothing.
+local binding_queries=physical_queries
 hooks._update_sweep(function() error('duplicate native update') end,action,.01,commit_t,0,action._action_settings)
-assert(physical_queries==1,'production collision was not driven exactly once by motion')
+assert(binding_queries>=1 and physical_queries==binding_queries,'production collision was not driven exactly once by motion')
+assert(files['results.tsv']:find('backfill',1,true),'binding did not sweep the stroke since its onset')
 local function contact() contacts=contacts+1; return false,false end
 hooks._process_hit(contact,action,commit_t,target,nil,{}, {},nil,nil,'torso')
 hooks._process_hit(contact,action,commit_t,target,nil,{}, {},nil,nil,'head')

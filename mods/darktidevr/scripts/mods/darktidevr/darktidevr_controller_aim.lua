@@ -779,6 +779,27 @@ function controller_aim.install(mod, presentation, state)
         end,...)
     end
 
+    -- Physical melee: the sweep follows the tracked weapon, so its contact is
+    -- the test, regardless of head gaze (docs/TRACKED-MELEE-DESIGN.md). The
+    -- stock view cone is +-32.5 degrees vertically and dropped hits on a body
+    -- in plain view in the headset. Stock actions keep with_physical_view.
+    function controller_aim.with_physical_contact(action,func,...)
+        if action._unit_data_extension and action._unit_data_extension.is_resimulating then return func(action,...) end
+        local extension=action._first_person_extension
+        if not is_local_unit(action._player_unit) or not extension or not extension.is_within_default_view then
+            return func(action,...)
+        end
+        action._first_person_extension=setmetatable({is_within_default_view=function() return true end},{__index=function(_,key)
+            local value=extension[key]
+            if type(value)=="function" then return function(_,...) return value(extension,...) end end
+            return value
+        end})
+        local result=packed(pcall(func,action,...))
+        action._first_person_extension=extension
+        if not result[1] then error(result[2],0) end
+        return unpack(result,2,result.n)
+    end
+
     function controller_aim.with_physical_view(action,func,...)
         if action._unit_data_extension and action._unit_data_extension.is_resimulating then return func(action,...) end
         if not is_local_unit(action._player_unit) or not presentation.eye_pose then return func(action,...) end
@@ -799,7 +820,7 @@ function controller_aim.install(mod, presentation, state)
             entry[2], function(func, self, ...)
                 local physical=presentation.physical_melee
                 if entry[1]=="action_sweep" and entry[2]=="_update_sweep" and physical and
-                        controller_aim.with_physical_view(self,physical.update_sweep,...) then return end
+                        controller_aim.with_physical_contact(self,physical.update_sweep,...) then return end
                 if not observe_start then
                     return controller_aim.with_melee_aim(self, func, ...)
                 end

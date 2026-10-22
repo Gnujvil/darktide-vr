@@ -29,6 +29,8 @@ function Replay.parse(text)
     if type(text)~="string" or #text>262144 then return nil,"scenario_size" end
     local keys={}
     for line in text:gmatch("[^\r\n]+") do
+        -- "# grip=touch": rotations are raw Touch grips, not weapon hilts.
+        if line:match("^%s*#%s*grip=touch%s*$") then keys.grip="touch" end
         if not line:match("^%s*#") and not line:match("^%s*$") then
             local values={}
             for token in line:gmatch("%S+") do

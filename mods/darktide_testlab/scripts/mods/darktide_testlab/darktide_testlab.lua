@@ -463,10 +463,13 @@ local function run_case(id,arguments)
     assert(threat.status()=="idle","stop and restore attacking episode before a new replay")
     assert(not temporary_weapon or temporary_weapon.status()=="idle" or temporary_weapon.status()=="active","temporary_weapon_not_ready")
     local words={}; for word in arguments:gmatch("%S+") do words[#words+1]=word end
-    assert(#words>=1 and #words<=5,"run requires scenario [profile] [stock|physical|physical-heavy] [duration_scale] [fixed|player]")
+    assert(#words>=1 and #words<=5,"run requires scenario [profile] [stock|physical|physical-heavy|gesture|gesture-heavy|gesture-swing] [duration_scale] [fixed|player]")
     local name,profile,mode,scale=words[1],words[2],words[3],tonumber(words[4] or "1")
-    assert(not mode or mode=="physical" or mode=="physical-heavy" or mode=="stock","unknown attack mode")
-    local physical=mode=="physical" or mode=="physical-heavy"
+    assert(not mode or mode=="physical" or mode=="physical-heavy" or mode=="stock" or mode=="gesture" or mode=="gesture-heavy" or mode=="gesture-swing","unknown attack mode")
+    -- gesture: the online route. Strokes press the stock attack; the stock
+    -- sweep, aimed along the stroke, decides every hit.
+    local gesture=mode=="gesture" or mode=="gesture-heavy" or mode=="gesture-swing"
+    local physical=mode=="physical" or mode=="physical-heavy" or gesture
     local anchor_mode=words[5] or "fixed"
     assert(anchor_mode=="fixed" or anchor_mode=="player","unknown anchor mode")
     assert(anchor_mode~="player" or physical,"player anchor requires physical mode")
@@ -478,6 +481,11 @@ local function run_case(id,arguments)
     assert(name:match("^[%w_-]+%.tsv$"),"scenario must be a local TSV filename")
     local source=file_read(name)
     local keys,reason=Replay.parse(source); assert(keys,reason)
+    -- Recorded controller grips enter the weapon in hilt frames, as tracking does.
+    if keys.grip=="touch" then
+        local Grip=mod:io_dofile("darktide_testlab/scripts/mods/darktide_testlab/melee_grip")
+        for _,key in ipairs(keys) do key.left=Grip.to_hilt(key.left); key.right=Grip.to_hilt(key.right) end
+    end
     assert(keys[#keys].t*scale<=30,"scaled scenario exceeds 30 seconds")
     local checksum=0
     for i=1,#source do checksum=(checksum*131+source:byte(i))%4294967296 end
@@ -519,7 +527,7 @@ local function run_case(id,arguments)
         unit=p.player_unit,slot=inventory.wielded_slot,target=state.target,before=health(state.target),targets=targets.capture(target_context()),
         sweeps=0,hits=0,samples=0,source=name,timeline={},weapon=weapon,weapon_extension=extension,
         session=Managers.state.game_session,last_step_wall=state.clock,weighted=weighted,profile=profile or "raw",
-        heavy_enabled=mode=="physical-heavy",duration_scale=scale,debug=Debug.new(),target_generation=state.target_generation,target_id=state.target_id,reference={}}
+        heavy_enabled=mode=="physical-heavy" or mode=="gesture-heavy",duration_scale=scale,debug=Debug.new(),target_generation=state.target_generation,target_id=state.target_id,reference={}}
     if physical then
         local function load(suffix)
             local module=mod:io_dofile("darktide_testlab/scripts/mods/darktide_testlab/melee_"..suffix)
@@ -532,10 +540,51 @@ local function run_case(id,arguments)
             state.strokes=load("strokes").new(); state.stroke_unit=p.player_unit; state.stroke_session=run.session
         end
         run.strokes=state.strokes; run.physical=true
+        run.authority=gesture and "stock" or "physical"
+        -- gesture/gesture-heavy press on the look-ahead's contact, as missions
+        -- do by default; gesture-swing presses on every stroke.
+        run.contact=gesture and mode~="gesture-swing"
+        if run.authority=="stock" then run.latch=load("gesture_aim").latch() end
         event("attack_mode",mode)
-        run.runtime=load("runtime").new({Timing=run.Timing,Volume=run.Volume,Planner=run.Planner,Bridge=load("action_bridge"),Defense=load("defense"),Tether=load("tether")},{
+        local Contact,Probe=load("contact"),load("probe")
+        run.runtime=load("runtime").new({Timing=run.Timing,Volume=run.Volume,Planner=run.Planner,Bridge=load("action_bridge"),Defense=load("defense"),Tether=load("tether"),Contact=Contact},{
             source="synthetic",owner=weighted,strokes=run.strokes,extension=extension,weapon=weapon,slot=run.slot,
-            unit=run.unit,defaults=run.defaults,cancel_on_adopt=true,native_events=true,
+            unit=run.unit,defaults=run.defaults,cancel_on_adopt=run.authority=="physical",native_events=true,
+            authority=run.authority,contact=run.contact and function(args)
+                local settings=weapon.weapon_template.actions[args.action]
+                local instance=weapon.actions and weapon.actions[args.action]
+                local uses_matrix=instance and instance._uses_matrix_data
+                if uses_matrix==nil then uses_matrix=type(settings and settings.sweeps)=="table" and #settings.sweeps>0 end
+                local volume=settings and run.Volume.resolve(weapon.weapon_template,settings,run.defaults,uses_matrix)
+                if not volume or not extension._physics_world then return nil end
+                local sides=Managers.state.extension:system("side_system")
+                local _,reach=run.Timing.authored_path(weapon.weapon_template,settings)
+                local fp=ScriptUnit.has_extension(run.unit,"first_person_system")
+                local head=fp and fp._first_person_component and fp._first_person_component.position
+                local within=reach and head and Contact.within(head,reach*(settings.range_mod or 1)) or nil
+                return Contact.query({world=extension._physics_world,volume=volume,filter="filter_player_character_melee_sweep",
+                    attacker=run.unit,Probe=Probe,HitZone=require("scripts/utilities/attack/hit_zone"),within=within,
+                    enemy=function(other) return not (sides and sides.side_by_unit[other] and sides:is_ally(run.unit,other)) end},args.poses)
+            end or nil,on_commit=run.authority=="stock" and function(data)
+                local Aim=load("gesture_aim")
+                local fp=ScriptUnit.has_extension(run.unit,"first_person_system")
+                local head=fp and fp._first_person_component and fp._first_person_component.position
+                local settings=weapon.weapon_template.actions[data.action]
+                local path,_,bounds
+                if settings then path,_,bounds=run.Timing.authored_path(weapon.weapon_template,settings) end
+                local center=bounds and {(bounds[1]+bounds[2])/2,(bounds[3]+bounds[4])/2,(bounds[5]+bounds[6])/2}
+                local yaw,pitch,roll,why=nil,"head_unavailable"
+                if head then
+                    yaw,pitch,roll,why=Aim.solve({Vector3.x(head),Vector3.y(head),Vector3.z(head)},data.points,path and path[#path],
+                        function(y,p,r,v)
+                            local w=Quaternion.rotate(Quaternion.from_yaw_pitch_roll(y,p,r),Vector3(v[1],v[2],v[3]))
+                            return {Vector3.x(w),Vector3.y(w),Vector3.z(w)}
+                        end,data.target,center)
+                end
+                if yaw then run.latch.push({time=data.time,yaw=yaw,pitch=pitch,roll=roll}) end
+                event("gesture_aim",string.format("action=%s yaw=%s pitch=%s roll=%s reason=%s points=%d",tostring(data.action),
+                    tostring(yaw),tostring(pitch),tostring(roll),tostring(yaw and (why or "aligned") or pitch),#data.points),run.id)
+            end or nil,
             to_world=function(value) return world_pose(run,value) end,
             freeze_world=function(p,q)
                 return {position={Vector3.x(p),Vector3.y(p),Vector3.z(p)},rotation={Quaternion.to_elements(q)}}
@@ -562,7 +611,12 @@ local function run_case(id,arguments)
             emit=function(kind,data)
                 if kind=="stroke" then
                     run.strokes_committed=(run.strokes_committed or 0)+1
-                    event("stroke",string.format("id=%d interval=%.6f action=%s source=%s intent_hand=%s",data.id,data.interval,data.action,data.source,tostring(data.intent_hand)))
+                    event("stroke",string.format("id=%d interval=%.6f action=%s source=%s intent_hand=%s authority=%s",data.id,data.interval,data.action,data.source,tostring(data.intent_hand),tostring(data.authority)))
+                elseif kind=="gesture_aim_error" or kind=="gesture_contact_error" then
+                    run.physical_failure=data.reason; event(kind,data.reason,run.id)
+                elseif kind=="gesture_armed" or kind=="gesture_contact" or kind=="gesture_whiff" then
+                    event(kind,string.format("action=%s zone=%s step=%s lead=%s armed_for=%s",tostring(data.action),
+                        tostring(data.zone),tostring(data.step),tostring(data.lead),tostring(data.armed_for)),run.id)
                 elseif kind=="trajectory_selected" then
                     event(kind,string.format("action=%s kind=%s score=%s mirrored=%s interval=%s",
                         tostring(data.action),tostring(data.kind),tostring(data.score),tostring(data.mirrored),tostring(data.interval)),run.id)
@@ -577,11 +631,15 @@ local function run_case(id,arguments)
                 elseif kind=="availability" then
                     if data.reason then event("physical_unavailable",data.reason) end
                 elseif kind=="query_rejected" then event("physical_query_rejected",data.reason)
+                elseif kind=="backfill" then
+                    event(kind,string.format("intervals=%d available=%d segments=%d seconds=%.4f",
+                        data.intervals,data.available,data.segments,data.seconds),run.id)
                 elseif kind=="invalidate" then
                     if state.run==run and (data.reason=="world_discontinuity" or tostring(data.reason):match("^sticky_")) then
                         run.abort_reason="runtime_"..tostring(data.reason)
                     end
                 elseif kind=="push" then event("push_requested","source="..data.source.." authority="..data.authority)
+                elseif kind=="interrupt" then event("interrupt","action="..tostring(data.action))
                 elseif kind=="charge_start" or kind=="charge_cancel" or kind=="followup_cancel" or kind=="followup_unavailable" then
                     event(kind,"action="..tostring(data.action).." reason="..tostring(data.reason))
                 elseif kind=="sticky_constraint" then event(kind,"target="..data.target.." node="..tostring(data.node).." frame="..tostring(data.frame))
@@ -602,7 +660,7 @@ local function run_case(id,arguments)
     end
     event("start",string.format("source=%s config=poly131_%08x duration_scale=%.6f keys=%d target=%s generation=%d weight=%s weapon=%s mode=desktop pose_source=synthetic_body_local clock=simulation seed=unavailable damage=%s pose_schema=2 debug=orange_raw,cyan_virtual,red_contact anchor=%s anchor_rotation=initial_camera",
         name,checksum,scale,#keys,state.target_id,state.target_generation,profile or "raw",tostring(weapon.weapon_template.name),
-        physical and "physical_local_prototype" or "stock_window",anchor_mode))
+        gesture and "stock_gesture" or physical and "physical_local_prototype" or "stock_window",anchor_mode))
 end
 local inventory_catalog=mod:io_dofile("darktide_testlab/scripts/mods/darktide_testlab/inventory").new({
     context=function()
@@ -661,7 +719,7 @@ temporary_weapon=mod:io_dofile("darktide_testlab/scripts/mods/darktide_testlab/l
             for _,entry in ipairs(list) do if entry==value then return true end end
             return false
         end
-        if not allows(item.breeds,archetype.breed) or not allows(item.archetypes,archetype.name) then return false end
+        if not item.testlab_any_class and (not allows(item.breeds,archetype.breed) or not allows(item.archetypes,archetype.name)) then return false end
         if not item.slots or not allows(item.slots,context.slot) or not item.gear_id then return false end
         local template=WeaponTemplate.weapon_template_from_item(item)
         for _,action in pairs(template.actions or {}) do
@@ -805,11 +863,72 @@ local function command(text)
                 assert(temporary_weapon.restore("command"),"weapon_restoration_pending")
             else
                 assert(temporary_weapon.status()=="idle","temporary_weapon_busy")
-                assert(args:match("^[%w_-]+$"),"weapon requires an owned gear ID or restore")
-                local item=assert(inventory_catalog.lookup(args),"fetch owned inventory before choosing a gear ID")
+                local template_name=args:match("^template:([%w_]+)$")
+                local item
+                if template_name then
+                    -- Any class's weapon, for this local Psykhanium session only:
+                    -- a temporary item built from the game's own master item,
+                    -- never saved to the account or the character's loadout.
+                    local master
+                    for _,folder in ipairs({"melee","ranged"}) do
+                        master=master or MasterItems.get_item("content/items/weapons/player/"..folder.."/"..template_name)
+                    end
+                    assert(master and master.weapon_template,"unknown_weapon_template")
+                    item=table.clone(master)
+                    item.gear_id="testlab_template_"..template_name
+                    item.testlab_any_class=true
+                else
+                    assert(args:match("^[%w_-]+$"),"weapon requires an owned gear ID, template:<name> or restore")
+                    item=assert(inventory_catalog.lookup(args),"fetch owned inventory before choosing a gear ID")
+                end
                 state.weapon_request=id
                 temporary_weapon.begin(item)
             end
+        elseif verb=="template" then
+            -- Read-only: each attack's timing, reach and authored tip bounds
+            -- (first-person metres: x right, y forward, z up from the eyes).
+            assert(args:match("^[%w_]+$"),"template requires a weapon template name")
+            local WeaponTemplates=require("scripts/settings/equipment/weapon_templates/weapon_templates")
+            local template=assert(WeaponTemplates[args],"unknown_weapon_template")
+            local Timing=mod:io_dofile("darktide_testlab/scripts/mods/darktide_testlab/melee_timing")
+            local names={}
+            for name,settings in pairs(template.actions or {}) do
+                if settings.kind=="sweep" or settings.kind=="windup" then names[#names+1]=name end
+            end
+            table.sort(names)
+            for _,name in ipairs(names) do
+                local settings=template.actions[name]
+                local fields={"template="..args,"action="..name,"kind="..settings.kind}
+                if settings.kind=="windup" then
+                    for _,input in ipairs({"light_attack","heavy_attack"}) do
+                        local chain=settings.allowed_chain_actions and settings.allowed_chain_actions[input]
+                        if chain and chain.action_name then fields[#fields+1]=input.."="..chain.action_name.."@"..tostring(chain.chain_time or 0) end
+                    end
+                else
+                    local points,reach,bounds=Timing.authored_path(template,settings)
+                    local net=points and points[#points]
+                    fields[#fields+1]=string.format("dws=%s dwe=%s total=%s range_mod=%s sticky=%s sticky_special=%s direction=%s",
+                        tostring(settings.damage_window_start),tostring(settings.damage_window_end),tostring(settings.total_time),
+                        tostring(settings.range_mod),tostring(settings.hit_stickyness_settings~=nil),
+                        tostring(settings.hit_stickyness_settings_special_active~=nil),tostring(settings.attack_direction_override))
+                    if net then
+                        fields[#fields+1]=string.format("reach=%.3f net=%.2f,%.2f,%.2f tip_x=%.2f..%.2f tip_y=%.2f..%.2f tip_z=%.2f..%.2f",
+                            reach,net[1],net[2],net[3],bounds[1],bounds[2],bounds[3],bounds[4],bounds[5],bounds[6])
+                    else fields[#fields+1]="path=unavailable" end
+                end
+                event("template_action",table.concat(fields," "),id)
+            end
+        elseif verb=="particles" then
+            -- Stereo renderer stress: a stream of the range's own one-shot spawn
+            -- explosion in front of the player, so particle effects finish on
+            -- nearly every frame. Visual only; nothing in gameplay changes.
+            assert(local_range(),"local Psykhanium required")
+            local seconds,per_frame=args:match("^([%d.]+)%s+(%d+)$")
+            seconds,per_frame=tonumber(seconds),tonumber(per_frame)
+            assert(seconds and seconds>0 and seconds<=600 and per_frame and per_frame>=1 and per_frame<=8,
+                "particles requires seconds 1..600 and per-frame 1..8")
+            state.particles={until_clock=state.clock+seconds,per_frame=per_frame,spawned=0,id=id}
+            event("particles_started","seconds="..seconds.." per_frame="..per_frame,id)
         elseif verb=="combat" then
             assert(local_range(),"local Psykhanium required")
             assert(args=="on" or args=="off" or args=="spawn","combat requires on, off or spawn")
@@ -893,7 +1012,10 @@ mod:hook(Sweep,"_update_sweep",function(func,self,dt,t,in_action,settings)
     local runtime=state.suppressed[self]
     if not runtime then return func(self,dt,t,in_action,settings) end
     if not local_range() then runtime.invalidate("context_changed"); return end
-    runtime.update_sweep(self,dt,t,settings)
+    -- Under the same contact rule as tracked physical melee, where loaded.
+    local vr=get_mod("darktidevr")
+    if vr and vr.with_physical_contact then vr.with_physical_contact(self,runtime.update_sweep,dt,t,settings)
+    else runtime.update_sweep(self,dt,t,settings) end
 end)
 local function packed(...) return {n=select("#",...),...} end
 mod:hook("GameModeManager","should_disable_minion_perception",function(func,self,...)
@@ -1141,7 +1263,7 @@ mod:hook(Sweep,"_process_hit",function(func,self,t,unit,actor,hits,settings,posi
     local live_before=live and unit==state.target and health(unit)
     local owned=run and targets.find(run.targets,unit)
     local before_mass=self._amount_of_mass_hit
-    if run and run.physical and self._player_unit==run.unit and
+    if run and run.physical and run.authority~="stock" and self._player_unit==run.unit and
             not run.runtime.claim(self,unit) then return false,false end
     if run and run.runtime then
         local actual=run.runtime.world_direction(self)
@@ -1327,6 +1449,25 @@ mod:hook_safe(HumanInput,"_parse_input",function(self,cache,input,index)
             if action then cache[action][index]=value end
         end
     end
+    -- The online route sends the stroke's orientation as stock input.
+    if run.latch then
+        local extension=ScriptUnit.has_extension(run.unit,"weapon_system")
+        local component=extension and extension._weapon_action_component
+        local name=component and component.current_action_name
+        local settings=name and run.weapon.weapon_template.actions[name]
+        local yaw,pitch,roll=run.latch.current(name,settings and settings.kind,component and component.start_t,run.simulation_t)
+        if yaw and self._yaw_index and cache[self._yaw_index] then
+            local limits=require("scripts/settings/player_character/player_orientation_settings").default
+            pitch=(pitch+math.pi)%(2*math.pi)-math.pi
+            cache[self._yaw_index][index]=yaw%(2*math.pi)
+            cache[self._pitch_index][index]=math.max(limits.min_pitch,math.min(limits.max_pitch,pitch))%(2*math.pi)
+            if roll and self._roll_index and cache[self._roll_index] then cache[self._roll_index][index]=roll end
+            if run.latched~=yaw then
+                run.latched=yaw
+                event("gesture_input",string.format("action=%s yaw=%.4f pitch=%.4f roll=%s",tostring(name),yaw,pitch,tostring(roll)),run.id)
+            end
+        end
+    end
     -- Dodge is a native ephemeral action, not an attack/hold binding.
     local dodge=self._action_lookup.dodge
     if dodge and cache[dodge] then cache[dodge][index]=sample.inputs[6].pressed end
@@ -1454,6 +1595,27 @@ mod:hook_safe("PlayerUnitVisualLoadoutExtension","post_update",function(self,uni
             place_node(visual,1,p,q); World.update_unit_and_children(world,visual)
         end
         if run.visual_frame~=run.frame then trace_pose(run,hand=="right" and "weapon" or "offhand_weapon",visual,1,p,q) end
+        -- Which way the rendered model extends from its placed root: the
+        -- physical sweep box runs along root +Z.
+        run.model_axis=run.model_axis or {}
+        if not run.model_axis[hand] then
+            run.model_axis[hand]=true
+            local ok,err=pcall(function()
+                local tm,half=Unit.box(visual)
+                local root=Unit.world_rotation(visual,1)
+                local inverse=Quaternion.inverse(root)
+                local axes={Matrix4x4.x(tm),Matrix4x4.y(tm),Matrix4x4.z(tm)}
+                local extents={Vector3.x(half),Vector3.y(half),Vector3.z(half)}
+                local long=1
+                for i=2,3 do if extents[i]>extents[long] then long=i end end
+                local axis=Quaternion.rotate(inverse,axes[long])
+                local centre=Quaternion.rotate(inverse,Matrix4x4.translation(tm)-Unit.world_position(visual,1))
+                event("weapon_model_axis",string.format("hand=%s long_local=%.3f,%.3f,%.3f half=%.3f,%.3f,%.3f centre_local=%.3f,%.3f,%.3f",
+                    hand,Vector3.x(axis),Vector3.y(axis),Vector3.z(axis),extents[1],extents[2],extents[3],
+                    Vector3.x(centre),Vector3.y(centre),Vector3.z(centre)),run.id)
+            end)
+            if not ok then event("weapon_model_axis","error="..tostring(err),run.id) end
+        end
         run.samples=run.samples+1
         end
     end
@@ -1514,6 +1676,25 @@ local function update(dt)
             elseif elapsed(run)>run.keys[#run.keys].t+.8 then
                 cleanup("complete")
             end
+        end
+    end
+    if state.particles then
+        local burst=state.particles
+        local unit=player() and player().player_unit
+        if state.clock>=burst.until_clock or not local_range() or not unit or not Unit.alive(unit) then
+            state.particles=nil
+            event("particles_finished","spawned="..burst.spawned,burst.id)
+        else
+            local world=Managers.world:world("level_world")
+            local position=Unit.world_position(unit,1)
+            local rotation=Unit.world_rotation(unit,1)
+            local forward,right=Quaternion.forward(rotation),Quaternion.right(rotation)
+            for _=1,burst.per_frame do
+                local offset=forward*(3+math.random()*5)+right*(math.random()*6-3)+Vector3(0,0,.5+math.random()*1.5)
+                World.create_particles(world,"content/fx/particles/weapons/force_staff/force_staff_explosion",
+                    position+offset,Quaternion.identity())
+            end
+            burst.spawned=burst.spawned+burst.per_frame
         end
     end
     if state.clock>=state.poll then state.poll=state.clock+.1; command(file_read("command.txt")) end

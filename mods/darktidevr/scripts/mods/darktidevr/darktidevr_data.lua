@@ -90,7 +90,7 @@ return {
                     {
                         setting_id = "vr_sight_ads",
                         type = "checkbox",
-                        default_value = false,
+                        default_value = true,
                     },
                     {
                         setting_id = "vr_gun_pitch",
@@ -157,6 +157,17 @@ return {
                 type = "group",
                 sub_widgets = {
                     {setting_id = "vr_pose_block", type = "checkbox", default_value = false},
+                    -- Online (server-run) melee only; the local Psykhanium's
+                    -- physical blade decides its own hits.
+                    {
+                        setting_id = "vr_online_melee_trigger",
+                        type = "dropdown",
+                        default_value = "contact",
+                        options = {
+                            {text = "vr_online_melee_trigger_contact", value = "contact"},
+                            {text = "vr_online_melee_trigger_swing", value = "swing"},
+                        },
+                    },
                 },
             },
             {
@@ -225,7 +236,7 @@ return {
                     {
                         setting_id = "vr_haptics_mode",
                         type = "dropdown",
-                        default_value = "off",
+                        default_value = "immersive",
                         options = {
                             {text = "vr_haptics_off", value = "off", show_widgets = {}},
                             {text = "vr_haptics_informative", value = "informative", show_widgets = {1}},

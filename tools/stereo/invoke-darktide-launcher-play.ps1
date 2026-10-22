@@ -372,14 +372,33 @@ while ((Get-Date) -lt $deadline) {
         exit 0
     }
     if ((Get-Date) -ge $nextPlayRetry) {
+        $changed = $null
         if (-not [DarktideVrLauncherInput]::IsOwnedWindow(
                 $launchWindowHandle, [uint32] $launcher.Id, 'Launcher')) {
-            throw 'Fatshark launcher Play window changed identity before the game started.'
+            $changed = 'Fatshark launcher Play window changed identity before the game started.'
         }
-        $retrySize = [DarktideVrLauncherInput]::GetClientSize(
-            $launchWindowHandle)
-        if ($retrySize[0] -ne $width -or $retrySize[1] -ne $height) {
-            throw "Fatshark launcher Play window geometry changed from ${width}x${height} to $($retrySize[0])x$($retrySize[1])."
+        else {
+            $retrySize = [DarktideVrLauncherInput]::GetClientSize(
+                $launchWindowHandle)
+            if ($retrySize[0] -ne $width -or $retrySize[1] -ne $height) {
+                $changed = "Fatshark launcher Play window geometry changed from ${width}x${height} to $($retrySize[0])x$($retrySize[1])."
+            }
+        }
+        if ($changed) {
+            # The launcher minimizes itself as the game starts (22 October:
+            # 1400x870 to 160x28 one second after Darktide started). Give the
+            # game process a bounded moment to appear before calling it a
+            # failure; never click a window that has changed.
+            $graceEnd = (Get-Date).AddSeconds(10)
+            while ((Get-Date) -lt $graceEnd) {
+                $game = Get-StartedDarktideProcess
+                if ($game) {
+                    Write-Output "Authenticated Darktide process started as the launcher window changed: PID $($game.Id)."
+                    exit 0
+                }
+                Start-Sleep -Milliseconds 250
+            }
+            throw $changed
         }
         $transitionGame = Invoke-ConfirmedLauncherClick `
             -Window $launchWindowHandle -X $playX -Y $playY

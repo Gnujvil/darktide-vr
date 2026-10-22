@@ -251,7 +251,9 @@ local before=queries
 for frame=0,130 do
     local time=frame/52
     local sample=Replay.sample(heavy_keys,0)
-    if charge_case=='early_motion' then sample.right.position[1]=-.6+math.min(1.2,math.max(0,time-.3)*4) end
+    -- A swing that ends before the minimum charge never becomes the heavy.
+    -- (One still moving when the charge completes counts from that sample.)
+    if charge_case=='early_motion' then sample.right.position[1]=-.6+math.min(1.2,math.max(0,time-.1)*4) end
     local current=assert(runtime.sample({source='synthetic',active=true,tracking_valid=true,reference=reference,
         frame=frame,time=40+time,pose_time=time,dominant=sample.right,support=sample.left,
         support_held=false,intent=true,guarding=false,heavy_intent=frame>=5 and (charge_case~='early_release' or frame<12)}))
@@ -342,10 +344,10 @@ end
 -- sampling, but a held contact never opens another physical overlap.
 template.actions.light.num_frames_before_process=0
 template.actions.light.hit_stickyness_settings={duration=.2}
-for _,sticky_case in ipairs({'natural','tick_error','tether','withdrawal','target_lost','constraint_error'}) do
+for _,sticky_case in ipairs({'natural','tick_error','tether','hold','withdrawal','target_lost','constraint_error'}) do
     sticky_release=nil
     local anchor,contact={},{position={0,0,0},rotation={0,0,0,1},target={},node=1}
-    if sticky_case=='tether' or sticky_case=='withdrawal' or sticky_case=='target_lost' or sticky_case=='constraint_error' then
+    if sticky_case=='tether' or sticky_case=='hold' or sticky_case=='withdrawal' or sticky_case=='target_lost' or sticky_case=='constraint_error' then
         sticky_frame=function()
             if anchor.error then error('injected native actor query failure') end
             if anchor.lost then return nil end
@@ -358,10 +360,22 @@ for _,sticky_case in ipairs({'natural','tick_error','tether','withdrawal','targe
     for frame=0,90 do
         local time=frame/52
         local sample=Replay.sample(keys,time)
-        local current=runtime.sample({source='synthetic',active=true,tracking_valid=true,reference=reference,
-            frame=frame,time=70+time,pose_time=time,dominant=sample.right,support=sample.left,
-            support_held=false,intent=true,guarding=false})
-        if not current then assert(sticky_case=='tick_error' or sticky_case=='withdrawal' or sticky_case=='target_lost' or sticky_case=='constraint_error');break end
+        local function request(at)
+            local value=Replay.sample(keys,at/52)
+            return {source='synthetic',active=true,tracking_valid=true,reference=reference,
+                frame=at,time=70+at/52,pose_time=at/52,dominant=value.right,support=value.left,
+                support_held=false,intent=true,guarding=false}
+        end
+        local current,_,released=runtime.sample(request(frame))
+        if not current then
+            assert(sticky_case=='tick_error' or sticky_case=='withdrawal' or sticky_case=='target_lost' or sticky_case=='constraint_error')
+            -- Pulling away from a live contact releases it: the stroke ends,
+            -- the source does not. A failed contact query still fails it.
+            local recoverable=sticky_case=='withdrawal' or sticky_case=='target_lost'
+            assert((released==true)==recoverable,'sticky release misreported source failure')
+            if recoverable then assert(runtime.sample(request(frame+1)),'released sticky contact did not resume sampling') end
+            break
+        end
         if current.stroke.committed then
             stroke_count=stroke_count+1;action=native_action(70+time)
             action._movement_state_component={can_jump=true}
@@ -400,6 +414,12 @@ for _,sticky_case in ipairs({'natural','tick_error','tether','withdrawal','targe
                     assert(math.abs(constrained.position[1]-anchor.position[1])<1e-8,'contact anchor drifted with raw hand')
                     assert(constrained.raw_dominant.position[1]==sample.right.position[1],'constraint overwrote raw intent')
                 elseif sticky_case=='withdrawal' then contact.position[1]=1
+                elseif sticky_case=='hold' then
+                    -- A follow-through short of STICKY_HOLD keeps the weapon in the target.
+                    if anchor.held then
+                        assert(math.abs(constrained.position[1]-anchor.held)<1e-8,'held weapon left its target')
+                    elseif constrained.held then anchor.held=constrained.position[1] end
+                    contact.position[1]=.45
                 elseif sticky_case=='constraint_error' then anchor.error=true
                 else anchor.lost=true end
             end
@@ -426,6 +446,7 @@ for _,sticky_case in ipairs({'natural','tick_error','tether','withdrawal','targe
             assert(not result and reason=='native_query_failed','constraint failure source was silently retried')
         end
     else assert(ticks==3) end
+    if sticky_case=='hold' then assert(sticky_release==nil and anchor.held,'a short follow-through broke the lock-in') end
     runtime.on_finish(action,72)
     action:_exit_damage_window();action:_handle_exit_procs()
     assert(window==1 and proc==1,'original native finish repeated sticky events')
@@ -488,6 +509,7 @@ for _,mode in ipairs({'moving','teleport','recenter','idle'}) do
         end,
         cancel_native=function(t) stopped=stopped+1;if action then runtime.on_finish(action,t) end end})
     local count=0
+    local captured,onset={},nil
     for frame=0,90 do
         anchor=frame*.003
         if commit and mode=='teleport' and frame==commit+2 then anchor=anchor+2 end
@@ -497,8 +519,10 @@ for _,mode in ipairs({'moving','teleport','recenter','idle'}) do
         local current=assert(runtime.sample({source='synthetic',active=true,tracking_valid=true,reference=reference,
             frame=frame,time=100+time,pose_time=time,dominant=sample.right,support=sample.left,
             support_held=false,intent=true,guarding=false}))
+        captured[#captured+1]={time=100+time,world=current.world}
         if current.stroke.committed then
             assert(not commit,'world anchor created an extra stroke');commit=frame
+            onset=assert(current.stroke.onset,'committed stroke has no onset')
             action=native_action(100+time)
             action._do_overlap=function(_,_,a,ar,b,br)
                 count=count+1;first=first or {position=a,rotation=ar};last={position=b,rotation=br}
@@ -506,6 +530,14 @@ for _,mode in ipairs({'moving','teleport','recenter','idle'}) do
             assert(runtime.on_start(action,action._action_settings,100+time))
         end
         expected=previous;first=nil;last=nil
+        -- Binding also sweeps the stroke's own motion: its first query starts
+        -- at the onset sample's captured world snapshot, likewise unremapped.
+        if frame==commit then
+            for _,entry in ipairs(captured) do
+                if math.abs(entry.time-onset)<1e-9 then expected=entry.world end
+            end
+            assert(expected~=previous,'stroke onset precedes no earlier captured sample')
+        end
         -- Mapping may change after sampling (render/update order). It must not
         -- remap either endpoint or mutate the captured query history.
         anchor=anchor+10
@@ -525,5 +557,117 @@ for _,mode in ipairs({'moving','teleport','recenter','idle'}) do
     end
     assert(mode=='idle' and not commit and count==0 or mode~='idle' and commit and count>0,'body intent/world query coverage missing')
     runtime.close()
+end
+-- A quick stroke can stop in the frame before its native action starts. It
+-- still binds once, sweeps the path it travelled, and claims nothing after.
+do
+    local latest
+    local passthrough={update=function(request)
+            latest={position={unpack(request.dominant.position)},rotation={unpack(request.dominant.rotation)},
+                raw_dominant=request.dominant,frame=request.frame,reset=latest==nil}
+            return latest
+        end,reset=function() latest=nil end,latest=function() return latest end,close=function() end,
+        contact=function() return true end,pin=function() return nil,'unsupported' end}
+    component.current_action_name='none';action=nil
+    local quick,quick_runtime
+    quick_runtime=Runtime.new(deps,{source='synthetic',owner=passthrough,strokes=Strokes.new(),extension=extension,weapon=weapon,
+        slot='slot_primary',unit=unit,defaults={sweep_width_mod=1,sweep_height_mod=1,sweep_range_mod=1},
+        to_world=function(pose) return pose.position,pose.rotation end,
+        cancel_native=function(t) component.current_action_name='none';if quick then quick_runtime.on_finish(quick,t) end end})
+    local quick_reference,quick_target,x,frame={},{},0,1000
+    local function sample(dx)
+        frame=frame+1;x=x+dx
+        return assert(quick_runtime.sample({source='synthetic',active=true,tracking_valid=true,reference=quick_reference,
+            frame=frame,time=50+frame/52,pose_time=frame/52,
+            dominant={position={x,.45,-.3},rotation={-0.70710678,0,0,0.70710678}},
+            support={position={-.25,.3,-.35},rotation={0,0,0,1}},support_held=false,intent=true,guarding=false}))
+    end
+    for _=1,10 do sample(0) end
+    local current
+    repeat current=sample(.06) until current.stroke.committed or frame>1040
+    assert(current.stroke.committed,'fast flick did not commit')
+    current=sample(0)
+    assert(not current.stroke.collision_allowed and current.stroke.ended,'flick did not stop before native binding')
+    quick=native_action(50+frame/52)
+    local seen,claimed=0,false
+    quick._do_overlap=function() seen=seen+1;claimed=claimed or quick_runtime.claim(quick,quick_target) end
+    assert(quick_runtime.on_start(quick,quick._action_settings,50+frame/52))
+    quick_runtime.update_sweep(quick,1/52,50+frame/52,quick._action_settings)
+    assert(seen>1 and claimed,'stopped stroke was not swept along its recorded path')
+    assert(not quick_runtime.claim(quick,{}),'stationary weapon kept claim permission after the final pass')
+    local before=seen
+    sample(0)
+    quick_runtime.update_sweep(quick,1/52,50+frame/52,quick._action_settings)
+    assert(seen==before,'stationary weapon queried after the final pass')
+    quick_runtime.close()
+end
+-- No attack cooldown: a new swing at stroke speed interrupts this runtime's
+-- own attack while it is still inside its native chain time, once.
+do
+    local latest
+    local passthrough={update=function(request)
+            latest={position={unpack(request.dominant.position)},rotation={unpack(request.dominant.rotation)},
+                raw_dominant=request.dominant,frame=request.frame,reset=latest==nil}
+            return latest
+        end,reset=function() latest=nil end,latest=function() return latest end,close=function() end,
+        contact=function() return true end,pin=function() return nil,'unsupported' end}
+    component.current_action_name='none';action=nil
+    local running,swing_runtime
+    local interrupts,stops=0,0
+    swing_runtime=Runtime.new(deps,{source='synthetic',owner=passthrough,strokes=Strokes.new(),extension=extension,weapon=weapon,
+        slot='slot_primary',unit=unit,defaults={sweep_width_mod=1,sweep_height_mod=1,sweep_range_mod=1},
+        to_world=function(pose) return pose.position,pose.rotation end,
+        emit=function(kind) if kind=='interrupt' then interrupts=interrupts+1 end end,
+        cancel_native=function(t)
+            stops=stops+1;component.current_action_name='none'
+            if running then swing_runtime.on_finish(running,t);running=nil end
+        end})
+    local swing_reference,x,frame={},0,2000
+    local function sample(dx)
+        frame=frame+1;x=x+dx
+        return assert(swing_runtime.sample({source='synthetic',active=true,tracking_valid=true,reference=swing_reference,
+            frame=frame,time=60+frame/52,pose_time=frame/52,
+            dominant={position={x,.45,-.3},rotation={-0.70710678,0,0,0.70710678}},
+            support={position={-.25,.3,-.35},rotation={0,0,0,1}},support_held=false,intent=true,guarding=false}))
+    end
+    for _=1,10 do sample(0) end
+    local current
+    repeat current=sample(.06) until current.stroke.committed or frame>2040
+    assert(current.stroke.committed,'first swing did not commit')
+    running=native_action(60+frame/52)
+    assert(swing_runtime.on_start(running,running._action_settings,60+frame/52))
+    for _=1,3 do sample(0) end
+    repeat current=sample(-.06) until current.stroke.committed or frame>2080
+    assert(current.stroke.committed and interrupts==1,'a swing waited for the running attack instead of interrupting it')
+    -- The game ends the old attack itself: it chains straight into the next
+    -- windup, with no stop and no change to the shared template.
+    local authored=template.actions.light.allowed_chain_actions.start_attack
+    local now=swing_runtime.select_chain(extension._action_handler,authored,60+frame/52,.1,1,template.actions)
+    assert(stops==0 and component.current_action_name=='light','interrupt stopped the attack instead of chaining')
+    assert(now~=authored and now.chain_time==nil and now.action_name=='windup' and authored.chain_time==.6,
+        'interrupting chain still waited for its authored chain time')
+    swing_runtime.close()
+end
+-- A sweep no stroke started (a weapon special: the trigger cannot start one
+-- in physical mode) runs as the stock attack instead of being swallowed.
+do
+    local special_owner=assert(Pose.new(Inertia,{profile='hammer',library_path=root..'/build/melee-inertia/darktidevr_melee_inertia.dll'}))
+    local special_unit,contexts={},{}
+    local special_runtime=Runtime.new(deps,{source='synthetic',owner=special_owner,strokes=Strokes.new(),extension=extension,
+        weapon=weapon,slot='slot_primary',unit=special_unit,defaults={sweep_width_mod=1,sweep_height_mod=1,sweep_range_mod=1},
+        to_world=function(pose) return pose.position,pose.rotation end,cancel_native=function() end,
+        emit=function(kind,data) if kind=='context' then contexts[#contexts+1]=data end end})
+    component.current_action_name='none'
+    local still=Replay.sample(keys,0)
+    assert(special_runtime.sample({source='synthetic',active=true,tracking_valid=true,reference={},frame=900,time=50,
+        pose_time=0,dominant=still.right,support=still.left,intent=true,guarding=false}))
+    component.current_action_name='light'
+    local special={_player_unit=special_unit,_weapon=weapon,_unit_data_extension={is_resimulating=false},
+        _weapon_action_component=component,_action_sweep_component={}}
+    assert(special_runtime.on_start(special,template.actions.light,50)==false,'a weapon special sweep was swallowed')
+    assert(special._action_sweep_component.sweep_state==nil and contexts[1].reason=='stock_sweep')
+    assert(special_runtime.update_sweep(special,1/52,50,template.actions.light)==false,'the special sweep was replaced')
+    component.current_action_name='none'
+    special_runtime.close()
 end
 print('melee_runtime=pass real_native_pose shared_source canonical_timing deliberate_stroke native_context world_mapping queries_once target_dedup impact input_edges source_separation cancel_once persistent_debt guard_shove heavy_charge_followthrough_recovery idle_charge_cancel support_only raw_intent_provenance grip_changes_no_queries native_lightning_lifetime world_anchor_history teleport_recenter_no_sweep locomotion_no_stroke')
