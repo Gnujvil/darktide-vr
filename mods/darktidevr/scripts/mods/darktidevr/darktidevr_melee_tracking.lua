@@ -25,13 +25,15 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
     local function private()
         return game_mode()=="shooting_range" and Managers.state.game_session and Managers.state.game_session:is_server()
     end
-    -- "physical" in the local Psykhanium: the tracked weapon itself sweeps.
-    -- "stock" wherever the stock online-input rules hold (missions, local or
-    -- remote): a swing presses the stock attack and the server sweeps.
+    -- "stock" wherever the stock online-input rules hold: missions (local or
+    -- remote) and the Psykhanium while its online combat rules option is on
+    -- (the default), so the online route is the one practised there. A swing
+    -- presses the stock attack and the server sweeps. "physical", the tracked
+    -- weapon itself sweeping, is the local Psykhanium with that option off.
     local function authority()
-        if private() then return "physical" end
         local rules=presentation.online_rules
         if rules and rules.enabled() then return "stock" end
+        if private() then return "physical" end
         return nil
     end
     state.latch=GestureAim.latch()
@@ -111,7 +113,7 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
         if profile~=state.profile then
             api.stop("profile_changed"); state.profile=profile; state.failed=false
             state.claimed_active=false; state.claimed_weapon=nil
-            log("mode",{profile=profile or "off",authority="local_range_physical_mission_stock"})
+            log("mode",{profile=profile or "off",authority="online_rules_stock_else_local_range_physical"})
         end
     end
     -- The physical weapon works in hilt frames; see darktidevr_melee_grip.
@@ -328,7 +330,7 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
             not presentation.gameplay_context.ui_blocks_gameplay(Managers.ui) and
             state.unit and Unit.alive(state.unit) and state.session==Managers.state.game_session and
             state.recenter==tracking.head_recenter_generation and state.transport==tracking.last_transport_generation and
-            tracking[presentation.hand_side("dominant").."_grip_tracking_live"] and private()
+            tracking[presentation.hand_side("dominant").."_grip_tracking_live"] and state.authority=="physical" and private()
     end
     function api.world_grip(side)
         if side~="left" and side~="right" then return nil end
@@ -345,7 +347,7 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
         if value then return Vector3(unpack(value.position)),Quaternion.from_elements(unpack(Grip.from_hilt(value.rotation))) end
     end
     function api.support_request(unit,enabled)
-        if state.profile and not state.failed and enabled and private() and unit then
+        if state.profile and not state.failed and enabled and authority()=="physical" and unit then
             local producer=Runtime.owner(unit)
             if producer and producer~=state.runtime then return nil end
             local extension=ScriptUnit.has_extension(unit,"weapon_system")

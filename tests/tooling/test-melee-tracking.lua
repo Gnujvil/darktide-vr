@@ -376,6 +376,33 @@ assert(stock.push,'online route took the trigger from a held block (push)')
 assert(stock_cancels==0,'online route cancelled a server action')
 assert(table.concat(logged,'\n'):find('authority=stock',1,true),'stock authority not reported')
 assert(table.concat(logged,'\n'):find('trigger=swing',1,true),'online trigger mode not reported')
+-- The Psykhanium runs the online route too while its online combat rules
+-- are on, so what is practised there is what missions run.
+api.stop('fixture_range_stock')
+for key in pairs(logged) do logged[key]=nil end
+api=Tracking.install(mod,presentation,tracking,function() return 'shooting_range' end,
+    {library_path=root..'/build/melee-inertia/darktidevr_melee_inertia.dll'})
+api.update()
+local function idle(first)
+    for fr=first,first+3 do
+        clock=clock+1/52
+        for column=1,4 do handler._input_cache[column][fr]=false end
+        api.pre_fixed(handler,1/52,clock,fr-1,{})
+        api.fixed_update(handler,1/52,clock,fr-1,{})
+    end
+end
+idle(7001)
+local text=table.concat(logged,'\n')
+assert(text:find('event=started',1,true) and text:find('authority=stock',1,true) and not text:find('authority=physical',1,true),
+    'Psykhanium with online rules did not run the online melee route')
+assert(not api.active() and api.world_grip('right')==nil,'Psykhanium online route rendered the physical weapon')
+assert(not api.support_request(unit,true),'Psykhanium online route claimed the support grip')
+-- Option off: the local physical prototype.
+presentation.online_rules={enabled=function() return false end}
+for key in pairs(logged) do logged[key]=nil end
+idle(7101)
+assert(table.concat(logged,'\n'):find('authority=physical',1,true),'Psykhanium without online rules lost the physical prototype')
+assert(api.support_request(unit,true),'physical prototype lost its support grip')
 presentation.online_rules=nil
 api.stop('fixture_end')
 print('melee_tracking=pass real_native_runtime raw_separation shared_world_mapping primary_motion grip_claim actual_direction cancel_service private_authority no_hardware_claim')
