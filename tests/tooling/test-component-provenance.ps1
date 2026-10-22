@@ -5,7 +5,8 @@ $hash = 'A' * 64
 $files = @(
     [pscustomobject]@{path='build/native/darktidevr_native_capture.dll';sha256=$hash},
     [pscustomobject]@{path='build/native/d3d12.dll';sha256=$hash},
-    [pscustomobject]@{path='build/viewer/darktidevr-xr-harness.exe';sha256=$hash}
+    [pscustomobject]@{path='build/viewer/darktidevr-xr-harness.exe';sha256=$hash},
+    [pscustomobject]@{path='build/melee/darktidevr_melee_inertia.dll';sha256=$hash}
 )
 function New-Receipt {
     [pscustomobject]@{schema_version=1;kind='component_build_records';components=@(
@@ -16,7 +17,11 @@ function New-Receipt {
         [pscustomobject]@{name='viewer';source_revision=('2' * 40);source_dirty=$false
             build_command='cmake --build build --config Release --target viewer'
             toolchain='MSVC fixture';build_options='Release x64';dependencies='fixture versions'
-            files=@($files[2])}
+            files=@($files[2])},
+        [pscustomobject]@{name='melee';source_revision=('3' * 40);source_dirty=$false
+            build_command='tools/stereo/build-melee-inertia.ps1'
+            toolchain='MSVC fixture';build_options='Release x64 ABI4';dependencies='fixture versions'
+            files=@($files[3])}
     )}
 }
 $script:checks = 0
@@ -34,6 +39,7 @@ $script:checks++
 Reject { param($r) $r.schema_version=2 }
 Reject { param($r) $r.components=@() }
 Reject { param($r) $r.components=$r.components[0..0] }
+Reject { param($r) $r.components=$r.components[0..1] }
 Reject { param($r) $r.components[0].source_dirty=$true }
 Reject { param($r) $r.components[0].source_dirty='false' }
 Reject { param($r) $r.components[0].source_revision='short' }

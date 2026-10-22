@@ -87,6 +87,14 @@ function VisualSettings.install(mod)
             mod:info("DARKTIDEVR_DISPLAY windowed=forced fullscreen=%s",
                 tostring(Application.is_fullscreen and Application.is_fullscreen()))
             mod:info("DARKTIDEVR_VISUAL_SETTINGS blur_dof_lens=forced_off")
+            local function user_boolean(key)
+                if not Application.user_setting then return "unavailable" end
+                local ok, value = pcall(Application.user_setting, "render_settings", key)
+                if ok and type(value) == "boolean" then return tostring(value) end
+                return "unavailable"
+            end
+            mod:info("DARKTIDEVR_RAYTRACE user_reflections=%s user_rtxgi=%s",
+                user_boolean("rt_reflections_enabled"), user_boolean("rtxgi_enabled"))
             if Application.settings then
                 local ok, settings = pcall(Application.settings)
                 if ok and type(settings) == "table" then

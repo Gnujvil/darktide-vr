@@ -180,7 +180,22 @@ function Sights.install(mod, presentation)
     local function drawn(unit, template_name, grip, aim, dt)
         local offset = Sights.offset(api.eyes[template_name], api.grips[template_name])
         local aim_state = presentation.controller_aim
-        local boxed = aim_state and aim_state.reticle_point_owner == unit and aim_state.reticle_world_point
+        local boxed = aim_state and aim_state.reticle_point_owner == unit and
+            aim_state.cached_reticle_target and aim_state.cached_reticle_target()
+        -- The sight line and the displayed crosshair must consume the same
+        -- validated target. Raw fields can survive a transport/session reset.
+        -- Nor may a new gun inherit the previous weapon's smoothed zeroing.
+        local generation = aim_state and aim_state.reticle_point_generation
+        local session = aim_state and aim_state.reticle_point_session
+        if api.owner ~= unit or api.template ~= template_name or
+                api.generation ~= generation or api.session ~= session then
+            api.correction = {0, 0, 0, 1}
+        end
+        api.owner, api.template, api.generation, api.session = unit, template_name, generation, session
+        if not offset or not boxed then
+            api.correction = {0, 0, 0, 1}
+            return aim
+        end
         local target = {0, 0, 0, 1}
         if offset and boxed then
             local point = boxed:unbox()

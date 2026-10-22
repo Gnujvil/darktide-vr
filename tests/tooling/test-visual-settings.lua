@@ -1,5 +1,6 @@
 local module = dofile(arg[1])
-local hooks, settings, render = {}, {}, {}
+local hooks, settings, render = {}, {render_settings={rt_reflections_enabled=false,rtxgi_enabled=true}}, {}
+local raytrace_log
 local ui = {update=function() return 'updated' end}
 require = function() return ui end
 local applied
@@ -14,6 +15,7 @@ ShadingEnvironment = {
     end,
 }
 Application = {
+    user_setting = function(location, key) return settings[location][key] end,
     set_user_setting = function(location, key, value)
         if value == nil and type(key) ~= 'table' then
             settings[location] = key
@@ -35,7 +37,9 @@ mod = {
         target[name] = function(...) return fn(original, ...) end
     end,
     hook_safe = function() error('Register startup through the existing UI update hook') end,
-    info = function() end,
+    info = function(_, format, ...)
+        if format:find('DARKTIDEVR_RAYTRACE', 1, true) then raytrace_log=string.format(format, ...) end
+    end,
 }
 module.install(mod)
 if arg[2] then
@@ -56,6 +60,8 @@ if arg[2] then
 else
     module.update()
 end
+assert(raytrace_log == 'DARKTIDEVR_RAYTRACE user_reflections=false user_rtxgi=true',
+    'read actual user settings and preserve false separately from unavailable')
 assert(render.dof_enabled == 'false')
 assert(settings.fullscreen == false and settings.borderless_fullscreen == false)
 assert(settings.screen_mode == 'window')

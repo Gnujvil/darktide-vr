@@ -1,6 +1,6 @@
--- Pure policy for the future always-active tracked melee volume. Not installed
--- in the live damage path yet; collision/profile/authority adapters own contact
--- validation before calling accept_contact. No motion or global cadence gate.
+-- Legacy continuous-overlap experiment, retained for its isolated fixtures.
+-- It is NOT the selected combat policy: new physical attacks use melee_strokes
+-- for deliberate motion, weapon-wide recovery and per-stroke target dedup.
 local Policy = {}
 
 local function finite(value)

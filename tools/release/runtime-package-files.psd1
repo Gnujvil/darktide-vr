@@ -20,6 +20,8 @@
         @{ Source = 'tools/stereo/set-skinner-assert-patch.ps1'; Destination = 'mods/darktidevr/tools/set-skinner-assert-patch.ps1' }
         @{ Source = 'build/windows-vs2022/src/producer/Release/d3d12.dll'; Destination = 'mods/darktidevr/bin/d3d12.dll' }
         @{ Source = 'build/windows-vs2022/src/producer/Release/darktidevr_native_capture.dll'; Destination = 'mods/darktidevr/bin/darktidevr_native_capture.dll' }
+        @{ Source = 'build/melee-inertia/darktidevr_melee_inertia.dll'; Destination = 'mods/darktidevr/bin/darktidevr_melee_inertia.dll' }
+        @{ Source = 'build/melee-inertia/HEFT-LICENSE.txt'; Destination = 'mods/darktidevr/bin/HEFT-LICENSE.txt' }
         @{ Source = 'build/windows-vs2022/tests/xr_harness/Release/darktidevr-xr-harness.exe'; Destination = 'mods/darktidevr/bin/darktidevr-xr-harness.exe' }
         @{ Source = 'build/windows-vs2022/tests/xr_harness/Release/openxr_loader.dll'; Destination = 'mods/darktidevr/bin/openxr_loader.dll' }
         @{ Source = 'build/windows-vs2022/tests/xr_harness/Release/OPENXR-LICENSE.txt'; Destination = 'mods/darktidevr/bin/OPENXR-LICENSE.txt' }
@@ -40,6 +42,7 @@
     ProjectBinaries = @(
         'mods/darktidevr/bin/d3d12.dll'
         'mods/darktidevr/bin/darktidevr_native_capture.dll'
+        'mods/darktidevr/bin/darktidevr_melee_inertia.dll'
         'mods/darktidevr/bin/darktidevr-xr-harness.exe'
     )
 }

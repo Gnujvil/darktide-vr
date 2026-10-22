@@ -1,0 +1,10 @@
+# Longer held contact stroke; native collision remains authoritative.
+# Native special then a short deliberate stroke and stationary contact hold.
+# Contact is measured in-game; this data does not assume it hits or sticks.
+# t left_xyz left_xyzw right_xyz right_xyzw primary block left_grip right_grip special
+0.00 -0.25 0.30 -0.35 0 0 0 1 -0.60 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0 0
+0.15 -0.25 0.30 -0.35 0 0 0 1 -0.60 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0 1
+0.25 -0.25 0.30 -0.35 0 0 0 1 -0.60 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0 0
+1.50 -0.25 0.30 -0.35 0 0 0 1 -0.60 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0 0
+1.62 -0.25 0.30 -0.35 0 0 0 1 -0.18 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0 0
+3.50 -0.25 0.30 -0.35 0 0 0 1 -0.18 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0 0

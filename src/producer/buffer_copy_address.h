@@ -6,6 +6,14 @@
 
 namespace darktidevr::producer {
 
+// Upload rings retain earlier allocations below begin. They are addressable,
+// but no longer belong to this flush and must not be read or patched.
+constexpr bool upload_flush_contains(std::uint64_t begin, std::uint64_t end,
+                                     std::uint64_t offset, std::uint64_t bytes) {
+  return end >= begin && offset >= begin && offset <= end &&
+         bytes <= end - offset;
+}
+
 constexpr bool buffer_copy_contains(std::uint64_t copy_offset,
                                     std::uint64_t copy_bytes,
                                     std::uint64_t requested_offset,

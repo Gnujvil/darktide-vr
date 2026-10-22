@@ -38,7 +38,13 @@ $builds = @(
        Offsets = @(0x7c89c6, 0x7c8ac2) },
     @{ Name = '1.13.2'
        Sha256 = 'a7131fecade52ad4758eb7c7fa26986aa2c32edd545cb50cc61585ebfb4f9deb'
-       Offsets = @(0x7c8ee6, 0x7c8fe2) }
+       Offsets = @(0x7c8ee6, 0x7c8fe2) },
+    # 1.13.3: same 246-instruction skinner fragment after relocating code
+    # addresses; both frame-generation comparisons still skip Bad Skinner!
+    # assertions at d3d12_dispatcher lines 376 and 396.
+    @{ Name = '1.13.3'
+       Sha256 = '119f6c84004da5642084c61e7265c226ebcff2a13245eadbfe4be77d80a78ef5'
+       Offsets = @(0x7c9806, 0x7c9902) }
 )
 $originalByte = [byte] 0x75
 $patchedByte = [byte] 0xeb

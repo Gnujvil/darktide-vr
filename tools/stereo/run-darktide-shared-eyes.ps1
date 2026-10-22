@@ -78,8 +78,14 @@ try {
         throw "A pre-guard XR harness is already running (PID $existingPids). Stop it before launching another writer."
     }
 
-$knownPatchedSha256 =
+$knownPatchedSha256 = @(
     '6fce8db87a77a412b22ef9f33f74fa16ef85126cc0fbb24187d78b85fc7a19d3'
+    # 1.13.2: set-skinner-assert-patch.ps1 verifies the pristine a7131fec...
+    # executable with only the two guarded branch bytes changed.
+    '175bab6527e94212562bc61c294172b6ef4830191b7e957bb9d1b98c9953efde'
+    # 1.13.3: exact pristine 119f6c84... with only the two audited bytes changed.
+    '849cebf1d1e744b631bacd9236a4b51ec5ba8172a097c656b192fd7888979dc7'
+)
 
 if (-not (Test-Path -LiteralPath $GameExe -PathType Leaf)) {
     throw "Darktide executable not found: $GameExe"
@@ -87,7 +93,7 @@ if (-not (Test-Path -LiteralPath $GameExe -PathType Leaf)) {
 $resolvedGameExe = (Resolve-Path -LiteralPath $GameExe).Path
 $actualHash = (Get-FileHash -LiteralPath $GameExe -Algorithm SHA256).
     Hash.ToLowerInvariant()
-if ($actualHash -ne $knownPatchedSha256) {
+if ($actualHash -cnotin $knownPatchedSha256) {
     throw "Shared-eye stereo requires the exact guarded skinner patch; found $actualHash"
 }
 

@@ -38,7 +38,7 @@ function Assert-ComponentProvenance {
     # pinned dependency checks; they must not inherit the packaging revision.
     foreach ($file in $Files) {
         $isProjectBinary = if ($ProjectBinaries) { $ProjectBinaries -icontains [string]$file.path }
-            else { $file.path -match '(^|[\\/])(darktidevr_native_capture\.dll|d3d12\.dll|darktidevr-xr-harness\.exe)$' }
+            else { $file.path -match '(^|[\\/])(darktidevr_native_capture\.dll|darktidevr_melee_inertia\.dll|d3d12\.dll|darktidevr-xr-harness\.exe)$' }
         if ($isProjectBinary -and -not $covered.Contains([string]$file.path)) {
             throw "Project binary lacks a component build record: $($file.path)"
         }

@@ -31,18 +31,29 @@ try {
             "$modRelative/KeyboardMouseOff",
             "$modRelative/tools/set-skinner-assert-patch.ps1", "$luaRelative/darktidevr.lua",
             "$modRelative/bin/d3d12.dll", "$modRelative/bin/darktidevr_native_capture.dll", "$modRelative/bin/darktidevr-xr-harness.exe",
+            "$modRelative/bin/darktidevr_melee_inertia.dll", "$modRelative/bin/HEFT-LICENSE.txt",
+            "$modRelative/bin/darktidevr_billboard_shader_substitution.flag", "$modRelative/bin/darktidevr_cluster_light_visibility_fix.flag",
             "$modRelative/bin/openxr_loader.dll", "$modRelative/bin/dxcompiler.dll",
             "$modRelative/bin/billboard_shaders/vs-42e436fb1ef1b392.dxil", "$modRelative/LICENSE", "$modRelative/THIRD_PARTY_NOTICES.md", "$modRelative/README.txt")) {
         Write-Fixture $relative ('fixture-' + $relative)
     }
     Write-Fixture ($luaRelative + '/module.lua') 'return {}'
-    $projectBinaries = @("$modRelative/bin/d3d12.dll", "$modRelative/bin/darktidevr_native_capture.dll", "$modRelative/bin/darktidevr-xr-harness.exe")
+    $projectBinaries = @("$modRelative/bin/d3d12.dll", "$modRelative/bin/darktidevr_native_capture.dll", "$modRelative/bin/darktidevr-xr-harness.exe", "$modRelative/bin/darktidevr_melee_inertia.dll")
     $files = Get-Files
     $manifest = @{schema_version=2;platform='windows-x64';layout='game_folder';release_state='development_candidate';
         project_binaries=$projectBinaries;lua_directory=$luaRelative;files=$files}
     $manifestPath = Join-Path $testRoot "$modRelative/package-manifest.json"
     $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
     & $verifier -PackageRoot $testRoot | Out-Null
+    foreach ($missing in @("$modRelative/bin/darktidevr_melee_inertia.dll", "$modRelative/bin/HEFT-LICENSE.txt",
+            "$modRelative/bin/darktidevr_billboard_shader_substitution.flag", "$modRelative/bin/darktidevr_cluster_light_visibility_fix.flag")) {
+        $manifest.files = @($files | Where-Object path -ne $missing)
+        Remove-Item -LiteralPath (Join-Path $testRoot $missing)
+        $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+        Assert-Rejected 'Required runtime package file is not listed'
+        Write-Fixture $missing ('fixture-' + $missing)
+    }
+    $manifest.files = $files
     $manifest.binary_source_provenance = 'recorded_hash_matched_claims'
     $manifest.component_provenance = @{schema_version=1;kind='component_build_records';components=@(
         @{name='fixture';source_revision=('1' * 40);source_dirty=$false

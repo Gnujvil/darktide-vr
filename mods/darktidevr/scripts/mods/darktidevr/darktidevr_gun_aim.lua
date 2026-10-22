@@ -152,6 +152,10 @@ function Alignment.install(mod,presentation)
             presentation.gun_sights.observe_grip(template.name,Unit.world_pose(muzzle_unit,muzzle_node),Unit.world_position(unit,attach))
         end
         instance.writes=instance.writes+1
+        if presentation.ranged_evidence then
+            presentation.ranged_evidence.capture_alignment(unit,template,muzzle_unit,muzzle_node,
+                Unit.world_position(unit,attach),equipped.item and equipped.item.gear_id)
+        end
         if instance.last_weapon~=template then
             instance.last_weapon=template
             local ax,ay,az,aw=Quaternion.to_elements(aim)

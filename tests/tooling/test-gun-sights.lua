@@ -54,6 +54,10 @@ local lines={}
 local reticle={0,10,0}
 local unit={}
 local presentation={controller_aim={reticle_point_owner=unit,reticle_world_point={unbox=function() return reticle end}}}
+local reticle_fresh=true
+presentation.controller_aim.cached_reticle_target=function()
+    if reticle_fresh then return presentation.controller_aim.reticle_world_point end
+end
 local api=Sights.install({info=function(_,f,...) lines[#lines+1]=string.format(f,...) end},presentation)
 local out=api.drawn_rotation(unit,'galvanic_rifle_p1_m1',{0,0,0},identity,1/90)
 for i=1,4 do near(out[i],identity[i],1e-12,'no grip measured yet: unchanged') end
@@ -65,6 +69,32 @@ assert(first[1]~=0,'correction starts')
 for _=1,60 do out=api.drawn_rotation(unit,'galvanic_rifle_p1_m1',{0,0,0},identity,1/90) end
 assert(sight_miss({0,0,0},identity,{x=-.001,z=.118},reticle,{out[1],out[2],out[3],out[4]})<.002,'settled on the reticle')
 assert(math.abs(first[1])<math.abs(out[1]),'eased in')
+-- The renderer has rejected this sample (transport reset, old session, or
+-- stale sequence), even though its raw fields still name the same player.
+-- Sight zeroing must use the same validated target as the visible reticle.
+reticle_fresh=false
+out=api.drawn_rotation(unit,'galvanic_rifle_p1_m1',{0,0,0},identity,1/90)
+for i=1,4 do near(out[i],identity[i],1e-12,'rejected reticle must not steer the gun') end
+reticle_fresh=true
+for _=1,60 do out=api.drawn_rotation(unit,'galvanic_rifle_p1_m1',{0,0,0},identity,1/90) end
+-- A weapon with no measured sight line must not inherit another gun's
+-- correction for several frames while its own calibration is unavailable.
+out=api.drawn_rotation(unit,'autogun_p1_m1',{0,0,0},identity,1/90)
+for i=1,4 do near(out[i],identity[i],1e-12,'unknown gun inherited another sight correction') end
+-- A valid new transport/session sample also starts a fresh correction;
+-- compare with a new consumer rather than carrying the old sight picture.
+presentation.controller_aim.reticle_point_generation=1
+presentation.controller_aim.reticle_point_session={}
+for _=1,60 do out=api.drawn_rotation(unit,'galvanic_rifle_p1_m1',{0,0,0},identity,1/90) end
+reticle={.4,10,.2}
+presentation.controller_aim.reticle_point_generation=2
+presentation.controller_aim.reticle_point_session={}
+local fresh_api=Sights.install({info=function() end},presentation)
+fresh_api.eyes, fresh_api.grips=api.eyes,api.grips
+local fresh_out=fresh_api.drawn_rotation(unit,'galvanic_rifle_p1_m1',{0,0,0},identity,1/90)
+out=api.drawn_rotation(unit,'galvanic_rifle_p1_m1',{0,0,0},identity,1/90)
+for i=1,4 do near(out[i],fresh_out[i],1e-12,'new session inherited old correction') end
+reticle={0,10,0}
 -- Another unit's reticle point is ignored: eases back to the bore.
 presentation.controller_aim.reticle_point_owner={}
 for _=1,90 do out=api.drawn_rotation(unit,'galvanic_rifle_p1_m1',{0,0,0},identity,1/90) end

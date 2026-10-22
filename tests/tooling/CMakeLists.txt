@@ -50,6 +50,12 @@ if(BUILD_TESTING)
   add_test(NAME native_startup_flags COMMAND "${LUAJIT_VALIDATOR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test-native-startup.lua"
     "${PROJECT_SOURCE_DIR}/mods/darktidevr/scripts/mods/darktidevr/darktidevr_native_startup.lua")
+    add_test(NAME render_submission_diagnostic COMMAND "${LUAJIT_VALIDATOR}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/test-render-submissions.lua"
+      "${PROJECT_SOURCE_DIR}/mods/darktidevr/scripts/mods/darktidevr/darktidevr.lua")
+    add_test(NAME testlab_combat_command COMMAND "${LUAJIT_VALIDATOR}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/test-testlab-combat-command.lua"
+      "${PROJECT_SOURCE_DIR}/mods/darktide_testlab/scripts/mods/darktide_testlab/darktide_testlab.lua")
   add_test(NAME luajit_compiler_contract COMMAND "${LUAJIT_VALIDATOR}"
     "${PROJECT_SOURCE_DIR}/tools/lua/test-compiler.lua")
   add_test(NAME luajit_source_path COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
@@ -308,6 +314,8 @@ if(BUILD_TESTING)
     add_test(NAME melee_timing COMMAND "${LUAJIT_VALIDATOR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test-melee-timing.lua"
       "${PROJECT_SOURCE_DIR}/mods/darktidevr/scripts/mods/darktidevr/darktidevr_melee_timing.lua")
+  add_test(NAME melee_trajectory_matcher COMMAND "${LUAJIT_VALIDATOR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test-melee-trajectory.lua" "${PROJECT_SOURCE_DIR}" --matcher-only)
     add_test(NAME gameplay_ui_input COMMAND "${LUAJIT_VALIDATOR}"
       "${CMAKE_CURRENT_SOURCE_DIR}/test-gameplay-ui-input.lua"
       "${PROJECT_SOURCE_DIR}/mods/darktidevr/scripts/mods/darktidevr/darktidevr_gameplay_ui_input.lua")
@@ -505,6 +513,8 @@ if(BUILD_TESTING)
     "${PROJECT_SOURCE_DIR}/mods/darktidevr/scripts/mods/darktidevr/darktidevr_controller_prompts.lua"
     "${PROJECT_SOURCE_DIR}/mods/darktidevr/scripts/mods/darktidevr/darktidevr_localization.lua"
     "${PROJECT_SOURCE_DIR}/mods/darktidevr/scripts/mods/darktidevr/darktidevr_menu_prompts.lua")
+  add_test(NAME testlab_manual_combat COMMAND "${LUAJIT_VALIDATOR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test-testlab-combat.lua" "${PROJECT_SOURCE_DIR}")
   add_test(NAME melee_simulation COMMAND "${LUAJIT_VALIDATOR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test-melee-simulation.lua"
     "${PROJECT_SOURCE_DIR}/mods/darktidevr/scripts/mods/darktidevr/darktidevr_melee_simulation.lua"

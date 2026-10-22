@@ -82,7 +82,7 @@ local function walk(list, depth, parent)
             else
                 where = id
                 if seen[id] then fail("two widgets share the setting_id " .. id) end
-                seen[id] = {type = widget.type, depth = depth}
+                seen[id] = {type = widget.type, depth = depth, default_value = widget.default_value}
                 order[#order + 1] = id
                 -- A widget may name its own label instead of using its id
                 -- (the controller bindings do, one per action).
@@ -243,6 +243,10 @@ local expected = {
 }
 for _, id in ipairs(expected) do
     if not seen[id] then fail("the setting " .. id .. " is no longer in the menu") end
+end
+local pose_block=seen.vr_pose_block
+if not pose_block or pose_block.type~="checkbox" or pose_block.default_value~=false then
+    fail("pose-only blocking must be an optional setting that defaults to off")
 end
 
 -- DMF HIDES a checkbox's or dropdown's children while it is off or on the

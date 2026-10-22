@@ -265,6 +265,24 @@ int main() {
     std::cerr << "Synthetic holster path contract failed\n";
     return 1;
   }
+  auto sight = left.state;
+  darktidevr::harness::apply_synthetic_sight_check_pose(sight);
+  const auto level = darktidevr::math::multiply(
+      sight.hands[1].body_aim_pose.orientation,
+      darktidevr::math::from_axis_angle({1.0F, 0.0F, 0.0F}, -0.1745329252F));
+  for (const auto& hand : sight.hands) {
+    if (hand.buttons || hand.trigger || hand.squeeze || hand.thumbstick_x ||
+        hand.thumbstick_y || !hand.body_aim_tracking_flags ||
+        !hand.body_grip_tracking_flags) {
+      std::cerr << "Sight-check pose introduced gameplay input or lost tracking\n";
+      return 1;
+    }
+  }
+  if (std::abs(level.x) > 1e-6F || std::abs(level.y) > 1e-6F ||
+      std::abs(level.z) > 1e-6F || std::abs(level.w - 1.0F) > 1e-6F) {
+    std::cerr << "Sight-check aim disagrees with default gun pitch\n";
+    return 1;
+  }
   std::cout << "Synthetic controller path contract passed\n";
   return 0;
 }

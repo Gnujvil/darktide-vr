@@ -140,13 +140,16 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 function Test-DarktideOfflineWorkloadReady {
-    param([string] $ConsoleText, [string] $SoloMission = '')
+    param([string] $ConsoleText, [string] $SoloMission = '', [bool] $Psykhanium = $false)
     if ($ConsoleText -notmatch 'DARKTIDEVR_STEREO active mode=synchronized_sequential') {
         return $false
     }
     if ($SoloMission) {
         $missionPattern = [regex]::Escape($SoloMission)
         return $ConsoleText -match "DARKTIDEVR_SOLO_BENCHMARK ready mission=$missionPattern difficulty=[1-5] host=singleplay"
+    }
+    if ($Psykhanium) {
+        return $ConsoleText -match 'StateGameplay:on_enter\(\): tg_shooting_range'
     }
     return $ConsoleText -match 'StateGameplay:on_enter\(\): hub_ship'
 }
@@ -415,11 +418,22 @@ if ($CaptureBillboardPsoIdentities) {
 $launchStarted = Get-Date
 $launchFailure = $null
 $cleanLaunchSaved = @{}
+$externalViewerFlag = $null
+$externalViewerOriginal = $null
+$externalViewerExisted = $false
 . (Join-Path $PSScriptRoot 'clean-launch-diagnostics.ps1')
 $advanceProcess = $null
 $characterStartFlag = Join-Path $GameRoot 'mods\darktidevr\darktidevr_start_character.flag'
 try {
 $gameAlreadyRunning = [bool](Get-Process Darktide -ErrorAction SilentlyContinue)
+if (-not $gameAlreadyRunning) {
+    # This runner owns the XR process. Prevent the mod's ordinary player
+    # launcher from creating a second client and replacing our runtime session.
+    $externalViewerFlag = Join-Path $GameRoot 'mods/darktidevr/darktidevr_external_viewer.flag'
+    $externalViewerExisted = Test-Path -LiteralPath $externalViewerFlag -PathType Leaf
+    if ($externalViewerExisted) { $externalViewerOriginal = [IO.File]::ReadAllBytes($externalViewerFlag) }
+    [IO.File]::WriteAllText($externalViewerFlag, "external`r`n", [Text.Encoding]::ASCII)
+}
 if (-not $gameAlreadyRunning -and -not $PreserveDiagnosticFlags) {
     Set-CleanLaunchDiagnostics -ModRoot (Join-Path $GameRoot 'mods/darktidevr') `
         -Saved $cleanLaunchSaved -CopyProbe $StreamlineCopyProbe.IsPresent `
@@ -957,7 +971,7 @@ if ($offlineNoHeadset) {
                 throw 'The stereo mod failed initialization; inspect the launch console log.'
             }
             $ready = if ($OfflineDualViewBenchmark) {
-                Test-DarktideOfflineWorkloadReady -ConsoleText $benchmarkText -SoloMission $OfflineSoloMission
+                Test-DarktideOfflineWorkloadReady -ConsoleText $benchmarkText -SoloMission $OfflineSoloMission -Psykhanium ([bool]$EnterPsykhanium)
             }
             elseif ($OfflineCharacterSelectCapture) {
                 $benchmarkText -match 'Entering Game State StateMainMenu' -and
@@ -1018,6 +1032,12 @@ catch { $launchFailure = $_; throw }
 finally {
     # Attempt every independent owner even if an earlier restoration fails.
     $cleanupSteps = @(
+    {
+        if ($externalViewerFlag) {
+            if ($externalViewerExisted) { Restore-FlagOriginal -LiteralPath $externalViewerFlag -Original $externalViewerOriginal }
+            elseif (Test-Path -LiteralPath $externalViewerFlag -PathType Leaf) { Remove-Item -LiteralPath $externalViewerFlag }
+        }
+    }
     {
         Restore-CleanLaunchDiagnostics -Saved $cleanLaunchSaved
     }

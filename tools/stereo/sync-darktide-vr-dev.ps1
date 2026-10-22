@@ -86,6 +86,7 @@ if ($UsePrebuiltProductionShader -and (-not $BillboardShaderSubstitution -or $Pa
 $sourceLua = Join-Path $repoRoot `
     'mods\darktidevr\scripts\mods\darktidevr\darktidevr.lua'
 $sourceLuaRoot = Split-Path -Parent $sourceLua
+$installedLuaRoot = Join-Path $modRoot 'scripts\mods\darktidevr'
 $sourceBootstrap = Join-Path $repoRoot `
     'mods\darktidevr\darktidevr.mod'
 $sourceNative = Join-Path $repoRoot `
@@ -97,11 +98,20 @@ if (-not (Test-Path -LiteralPath $luaSourceCheck -PathType Leaf)) {
     throw "Lua source check not found: $luaSourceCheck"
 }
 & $luaSourceCheck -SourcePath $sourceLua
+& (Join-Path $PSScriptRoot 'build-melee-inertia.ps1')
+if ($LASTEXITCODE) { throw 'Native melee inertia build failed' }
 $destinations = @(
     [pscustomobject]@{
+        Source = Join-Path $repoRoot 'build\melee-inertia\darktidevr_melee_inertia.dll'
+        Destination = Join-Path $modRoot 'bin\darktidevr_melee_inertia.dll'
+    },
+    [pscustomobject]@{
+        Source = Join-Path $repoRoot 'build\melee-inertia\HEFT-LICENSE.txt'
+        Destination = Join-Path $modRoot 'bin\HEFT-LICENSE.txt'
+    },
+    [pscustomobject]@{
         Source = $sourceLua
-        Destination = Join-Path $modRoot `
-            'scripts\mods\darktidevr\darktidevr.lua'
+        Destination = Join-Path $installedLuaRoot 'darktidevr.lua'
     },
     [pscustomobject]@{
         Source = $sourceBootstrap
@@ -168,8 +178,7 @@ $moduleFiles = Get-ChildItem -LiteralPath $sourceLuaRoot -Filter '*.lua' |
 foreach ($moduleFile in $moduleFiles) {
     $destinations += [pscustomobject]@{
         Source = $moduleFile.FullName
-        Destination = Join-Path (Split-Path -Parent $destinations[0].Destination) `
-            $moduleFile.Name
+        Destination = Join-Path $installedLuaRoot $moduleFile.Name
     }
 }
 

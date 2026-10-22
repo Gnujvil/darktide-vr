@@ -34,6 +34,10 @@ SyntheticControllerPathSample synthetic_controller_path_sample(
 void apply_synthetic_body_reach_path(core::SharedControllerState& state,
                                      std::uint64_t frame);
 
+// Stationary, input-neutral near-eye pose for private gun-sight measurements.
+// Darktide body basis; +10 degree aim pitch cancels the default -10 gun pitch.
+void apply_synthetic_sight_check_pose(core::SharedControllerState& state);
+
 // Replaces only gameplay controls with a repeatable private-range matrix:
 // staff wield, primary projectile, charged/ADS projectile, Psyker lightning,
 // sword wield and melee primary. Tracking poses remain unchanged.

@@ -101,4 +101,41 @@ assert(not failed and reason=='unsupported_route' and at=='w3')
 combo.actions.l3.allowed_chain_actions.start_attack.running_action_state_requirement=nil
 combo.actions.l2.allowed_chain_actions.start_attack.action_name='missing'
 assert(not Timing.light_combo(combo,'w1',scale(1),nil,function() return true end))
-print("melee_timing=pass combo=variable graph=bounded heavy_minimum_distinct_from_auto_complete=true")
+do
+    local factor,available=1,true
+    local template={actions={
+        w1={kind='windup',start_input='start_attack',allowed_chain_actions={
+            light_attack={action_name='l1'},heavy_attack={action_name='h1',chain_time=.4}}},
+        w2={kind='windup',allowed_chain_actions={
+            light_attack={action_name='l2'},heavy_attack={action_name='h1',chain_time=.4}}},
+        l1={kind='sweep',sweeps={{}},allowed_chain_actions={start_attack={action_name='w2',chain_time=.6}}},
+        l2={kind='sweep',sweeps={{}},allowed_chain_actions={start_attack={action_name='w1',chain_time=.4}}},
+        h1={kind='sweep'}},action_inputs={heavy_attack={input_sequence={
+            {input='action_one_hold',value=true,duration=.35},{input='action_one_hold',value=false}}}}}
+    local component={current_action_name='none',start_t=10}
+    local handler={_calculate_time_scale=function() return factor end,
+        _validate_action=function() return available end,_action_kinds_with_inverted_timescale={sweep=true}}
+    local extension={_weapons={slot_primary={weapon_template=template,actions={}}},
+        _action_handler=handler,_weapon_action_component=component,condition_func_params=function() return {} end}
+    local opening=assert(Timing.live(extension,'slot_primary',10))
+    assert(opening.light_action=='l1' and opening.light_interval==.6 and opening.ready and opening.uses_matrix_data,
+        'live timing required a lazily uncreated native action')
+    component.current_action_name='l1'
+    local next_attack=assert(Timing.live(extension,'slot_primary',10.4,'l1'))
+    assert(next_attack.light_action=='l2' and next_attack.light_interval==.4 and not next_attack.ready)
+    assert(next_attack.recovery_interval==.6,'next combo timing replaced committed stroke debt')
+    factor=2
+    next_attack=assert(Timing.live(extension,'slot_primary',10.4,'l1'))
+    assert(next_attack.ready and next_attack.light_interval==.2 and next_attack.recovery_interval==.3)
+    factor=.5
+    next_attack=assert(Timing.live(extension,'slot_primary',10.4,'l1'))
+    assert(next_attack.ready and next_attack.light_interval==.2 and next_attack.recovery_interval==.3,
+        'live readiness disagreed with native inverted timescale')
+    available=false
+    assert(not Timing.live(extension,'slot_primary',100,'l1').ready,'native condition denial was ignored')
+    available=true; component.current_action_name='none'; template.actions.w2.start_input='start_attack'
+    local result,reason=Timing.live(extension,'slot_primary',100)
+    assert(not result and reason=='ambiguous_entry','ambiguous idle entry guessed a route')
+    assert(not Timing.live({},'slot_primary',100))
+end
+print("melee_timing=pass combo=variable graph=bounded heavy_minimum_distinct_from_auto_complete=true live_native lazy_instances buff_scale committed_recovery inverted_readiness native_conditions")

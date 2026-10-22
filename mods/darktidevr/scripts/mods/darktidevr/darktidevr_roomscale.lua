@@ -8,18 +8,26 @@ function Roomscale.new()
     local s = {x=0,y=0,z=0,cx=0,cy=0,render_cx=0,render_cy=0,
         rows={},automatic=false,deadzone=.10,max_speed=1.5}
     function s.reset()
-        s.owner,s.epoch,s.sequence,s.sample_time=nil,nil,nil,nil
+        s.owner,s.epoch,s.sequence,s.sample_time,s.calibrated_height=nil,nil,nil,nil,nil
         s.x,s.y,s.z,s.rows,s.automatic=0,0,0,{},false
         s.cx,s.cy,s.render_cx,s.render_cy,s.last_frame=0,0,0,0,nil
     end
-    function s.sample(owner,epoch,sequence,now,bx,bz,raw_y,floor,scale,yaw)
+    function s.sample(owner,epoch,sequence,now,bx,bz,raw_y,floor,scale,yaw,calibrated_height)
         if not finite(bx) or not finite(bz) or not finite(raw_y) or
                 not finite(sequence) or sequence<=0 or not finite(now) or
                 not finite(scale) or scale<=0 or not finite(yaw) then return false end
-        if owner~=s.owner or epoch~=s.epoch or (s.sequence and sequence<s.sequence) then
+        calibrated_height=finite(calibrated_height) and calibrated_height>=.8 and
+            calibrated_height<=2.4 and calibrated_height or nil
+        if owner~=s.owner or epoch~=s.epoch or calibrated_height~=s.calibrated_height or
+                (s.sequence and sequence<s.sequence) then
             s.reset()
             s.owner,s.epoch,s.bx,s.bz=owner,epoch,bx,bz
-            s.floor_base=finite(floor) and floor>0 and floor-raw_y or nil
+            s.calibrated_height=calibrated_height
+            -- The viewer may establish LOCAL while the headset is on a desk.
+            -- The avatar anchor already represents the calibrated standing
+            -- eye, so STAGE height must be relative to that same eye, not the
+            -- unworn LOCAL origin. This offset is shared by eyes and hands.
+            s.floor_base=calibrated_height or (finite(floor) and floor>0 and floor-raw_y or nil)
         end
         if sequence==s.sequence then return true end
         local dx,dy=(bx-s.bx)*scale,-(bz-s.bz)*scale
@@ -101,9 +109,18 @@ function Roomscale.install(mod,presentation)
         instance.failures=instance.failures+1
         if instance.failures==1 then mod:warning("DARKTIDEVR_ROOMSCALE fallback=%s",tostring(message)) end
     end
-    function instance.offset(unit,epoch,sequence,now,bx,bz,raw_y,floor,scale,yaw)
-        if not presentation.online_rules.simulation_aim_active(unit) then s.reset(); return 0,0,0 end
-        s.sample(unit,epoch,sequence,now,bx,bz,raw_y,floor,scale,yaw)
+    function instance.offset(unit,epoch,sequence,now,bx,bz,raw_y,floor,scale,yaw,calibrated_height)
+        if not presentation.online_rules.simulation_aim_active(unit) then
+            s.reset()
+            -- Height is presentation, not a movement/aim permission. Keep the
+            -- eye and hands aligned even while stock temporarily owns aim.
+            if finite(calibrated_height) and calibrated_height>=.8 and calibrated_height<=2.4 and
+                    finite(floor) and floor>0 and finite(raw_y) and finite(scale) and scale>0 then
+                return 0,0,(floor-calibrated_height-raw_y)*scale
+            end
+            return 0,0,0
+        end
+        s.sample(unit,epoch,sequence,now,bx,bz,raw_y,floor,scale,yaw,calibrated_height)
         return s.render_offset()
     end
     local function plan(unit,frame,dt,t,yaw,desired,quantize)

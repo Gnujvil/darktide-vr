@@ -6,6 +6,7 @@
 #include <Windows.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -33,7 +34,8 @@ std::uint64_t timestamp_ns() {
 void print_usage() {
   std::wcout << L"Usage: darktidevr-synthetic-controller-publisher "
                 L"[--seconds N] [--weapon-aim-matrix] "
-                L"[--neutral-body-pose] [--holster-path]\n";
+                L"[--neutral-body-pose] [--holster-path] [--sight-check] "
+                L"[--sight-grip-x metres] [--sight-grip-z metres]\n";
 }
 
 }  // namespace
@@ -44,6 +46,9 @@ int wmain(int argc, wchar_t** argv) {
     bool weapon_aim_matrix = false;
     bool neutral_body_pose = false;
     bool holster_path = false;
+    bool sight_check = false;
+    float sight_grip_x = 0.032F;
+    float sight_grip_z = -0.118F;
     for (int index = 1; index < argc; ++index) {
       const std::wstring argument(argv[index]);
       if (argument == L"--help") {
@@ -58,6 +63,16 @@ int wmain(int argc, wchar_t** argv) {
         neutral_body_pose = true;
       } else if (argument == L"--holster-path") {
         holster_path = true;
+      } else if (argument == L"--sight-check") {
+        sight_check = true;
+      } else if ((argument == L"--sight-grip-x" || argument == L"--sight-grip-z") && index + 1 < argc) {
+        const std::wstring text(argv[++index]);
+        std::size_t consumed{};
+        const auto value = std::stof(text, &consumed);
+        if (consumed != text.size() || !std::isfinite(value) || std::abs(value) > 0.4F) {
+          throw std::invalid_argument("Sight grip coordinate must be finite and within +/-0.4 metres");
+        }
+        (argument == L"--sight-grip-x" ? sight_grip_x : sight_grip_z) = value;
       } else {
         print_usage();
         return 2;
@@ -143,6 +158,14 @@ int wmain(int argc, wchar_t** argv) {
               sample.state, gameplay_active ? matrix_frame++ : 110);
           if (gameplay_active) {
             ++gameplay_active_frames;
+          }
+        }
+        if (sight_check) {
+          darktidevr::harness::apply_synthetic_sight_check_pose(sample.state);
+          for (auto* pose : {&sample.state.hands[1].body_aim_pose,
+                            &sample.state.hands[1].body_grip_pose}) {
+            pose->position.x = sight_grip_x;
+            pose->position.z = sight_grip_z;
           }
         }
         if (!writer.publish(sample.state)) {

@@ -22,6 +22,10 @@ build/
 /--help/
 dist/
 bin/
+!tools/release/package-files/bin/
+tools/release/package-files/bin/*
+!tools/release/package-files/bin/darktidevr_billboard_shader_substitution.flag
+!tools/release/package-files/bin/darktidevr_cluster_light_visibility_fix.flag
 obj/
 node_modules/
 __pycache__/

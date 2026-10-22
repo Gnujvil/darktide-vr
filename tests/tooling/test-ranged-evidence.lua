@@ -121,3 +121,36 @@ hit_scan.process_hits(true,{}, {},'local',{},hits,Vector3(0,0,0),Vector3(0,1,0))
 hit_scan.process_hits(true,{}, {},'local',{},hits,Vector3(0,0,0),Vector3(0,1,0))
 assert(instance.hits.failures==2,'hit diagnostic failure escaped containment')
 print('PASS hit evidence: exact nil-bearing stock returns, untouched hits, proxy classification, bounded local observations and failure isolation')
+-- The requested render-pose sample reads actual model geometry after posing.
+-- A parallax-offset bore and an aligned sight line must remain distinct.
+meta.__add=function(a,b) return Vector3(a[1]+b[1],a[2]+b[2],a[3]+b[3]) end
+Quaternion.rotate=function(_,v) return v end
+Unit={world_position=function() return Vector3(.3,0,0) end,
+    world_rotation=function() return Vector3(0,1,0) end}
+presentation.gun_sights={sight_offset=function() return {x=0,z=0,axis={0,1,0}} end}
+presentation.controller_aim.cached_reticle_target=function()
+    return {unbox=function() return Vector3(0,10,0) end}
+end
+local n=#logs
+mod.request_crosshair_check('local',2)
+instance.capture_alignment('bot',{name='rifle'},{},1,Vector3(0,0,0),'owned')
+assert(#logs==n,'another unit consumed the local request')
+instance.capture_alignment('local',{name='rifle'},{},1,Vector3(0,0,0),'owned')
+assert(#logs==n+1 and logs[#logs]:find('sight_angle_deg=0',1,true))
+assert(logs[#logs]:find('bore_angle_deg=1.',1,true),'model bore was replaced with the aim ray')
+instance.capture_alignment('local',{name='rifle'},{},1,Vector3(0,0,0),'owned')
+assert(#logs==n+1,'same-frame sample was not throttled')
+hit_clock=hit_clock+.2
+instance.capture_alignment('local',{name='rifle'},{},1,Vector3(0,0,0),'owned')
+hit_clock=hit_clock+.2
+instance.capture_alignment('local',{name='rifle'},{},1,Vector3(0,0,0),'owned')
+assert(#logs==n+2,'observer exceeded requested sample budget')
+mod.request_crosshair_check('local',2);Managers.state.game_session={}
+instance.capture_alignment('local',{name='rifle'},{},1,Vector3(0,0,0),'owned')
+assert(#logs==n+2,'old-session request sampled a new world')
+assert(not pcall(mod.request_crosshair_check,'local',61))
+assert(not pcall(mod.request_crosshair_check,'remote',1))
+local angle,miss,along=Evidence.ray_to_point(Vector3(0,0,0),Vector3(0,1,0),Vector3(0,-10,0))
+assert(angle==180 and miss==0 and along==-10,'backwards sight line falsely aligned')
+assert(Evidence.ray_to_point(Vector3(0,0,0),Vector3(0,0,0),Vector3(0,10,0))==nil)
+print('PASS crosshair geometry: posed bore vs sight, bounded/throttled local samples, session isolation and invalid direction refusal')

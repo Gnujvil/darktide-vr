@@ -36,3 +36,11 @@ foreach ($case in $cases) {
     }
 }
 Write-Output "offline_workload_readiness=pass cases=$($cases.Count) game_started=false"
+
+$range = 'StateGameplay:on_enter(): tg_shooting_range'
+if (-not (Test-DarktideOfflineWorkloadReady "$range`n$stereo" -Psykhanium $true) -or
+    (Test-DarktideOfflineWorkloadReady "$hub`n$stereo" -Psykhanium $true) -or
+    (Test-DarktideOfflineWorkloadReady $range -Psykhanium $true)) {
+    throw 'Private range workload requires both range entry and production stereo.'
+}
+Write-Output 'offline_psykhanium_readiness=pass cases=3 game_started=false'

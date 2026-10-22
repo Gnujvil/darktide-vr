@@ -1,4 +1,7 @@
 return {
+    melee_options = {en = "Physical melee"},
+    vr_pose_block = {en = "Block by holding a guard pose"},
+    vr_pose_block_description = {en = "Off by default. With physical melee enabled, settle your shield hand (or weapon hand without a shield) in front of you to block without holding the block button. Lower it to release. Native block angles and stamina still apply. Shove forward to push. Hold the right trigger before the shove, then swing the weapon hand for a push attack. Lower guard before starting a charged heavy."},
     vr_crosshair_scale = {en = "Crosshair scale (%%)"},
     vr_crosshair_scale_description = {en = "Resize the hand-aim crosshair, charge bars and hit feedback together. Updates while playing. 100%% restores the original size; the default is 70%%."},
     ads_focus = {en = "Aim-down-sights focus"},

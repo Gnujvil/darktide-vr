@@ -5518,6 +5518,7 @@ void STDMETHODCALLTYPE resource_unmap_hook(ID3D12Resource* resource,
 struct StingrayUploadSnapshot {
   ID3D12Resource* resource{};
   std::byte* staging_base{};
+  std::uint64_t staging_begin{};
   std::uint64_t staging_size{};
 };
 
@@ -5541,6 +5542,7 @@ bool take_stingray_upload_snapshot(void* allocator,
         *reinterpret_cast<ID3D12Resource* const*>(entry + 0x10);
     snapshot->staging_base =
         *reinterpret_cast<std::byte* const*>(entry + 0x18);
+    snapshot->staging_begin = begin_offset;
     snapshot->staging_size = end_offset;
     return snapshot->resource && snapshot->staging_base &&
            end_offset >= begin_offset &&
@@ -5727,8 +5729,9 @@ void stingray_upload_flush_hook(void* allocator) {
         continue;
       }
       if (pending.resource != snapshot.resource ||
-          pending.resource_offset + kRasterConstantBytes >
-              snapshot.staging_size) {
+          !darktidevr::producer::upload_flush_contains(
+              snapshot.staging_begin, snapshot.staging_size,
+              pending.resource_offset, kRasterConstantBytes)) {
         continue;
       }
       float staged_fov{};

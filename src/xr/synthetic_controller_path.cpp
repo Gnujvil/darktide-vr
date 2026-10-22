@@ -168,6 +168,22 @@ void apply_synthetic_body_reach_path(core::SharedControllerState& state,
   }
 }
 
+void apply_synthetic_sight_check_pose(core::SharedControllerState& state) {
+  constexpr std::uint32_t tracked = core::controller_orientation_valid |
+      core::controller_position_valid | core::controller_orientation_tracked |
+      core::controller_position_tracked;
+  for (std::size_t index = 0; index < 2; ++index) {
+    auto& hand = state.hands[index];
+    math::Pose pose{};
+    pose.position = {index == 1 ? 0.032F : -0.18F, 0.35F, -0.118F};
+    pose.orientation = math::from_axis_angle({1.0F, 0.0F, 0.0F}, 0.1745329252F);
+    hand.body_aim_pose = hand.body_grip_pose = pose;
+    hand.body_aim_tracking_flags = hand.body_grip_tracking_flags = tracked;
+    hand.trigger = hand.squeeze = hand.thumbstick_x = hand.thumbstick_y = 0.0F;
+    hand.buttons = 0;
+  }
+}
+
 void apply_synthetic_weapon_aim_matrix(core::SharedControllerState& state,
                                        std::uint64_t frame) {
   constexpr std::uint64_t cycle_frames = 720;

@@ -134,6 +134,26 @@ local function with_first_person_pose(action, position, rotation, func, ...)
     return finish_first_person_pose(action, component, pcall(func, action, ...))
 end
 
+-- Only the native view predicate reads this scoped pose. Shared simulation
+-- components, explicit physical sweep endpoints and other methods stay native.
+local function with_view_pose(action,position,rotation,func,...)
+    local component,extension=action._first_person_component,action._first_person_extension
+    if not component or not extension or not extension.is_within_default_view then return func(action,...) end
+    local view=setmetatable({_first_person_component=setmetatable({position=position,rotation=rotation},
+        {__index=component})},{__index=extension})
+    action._first_person_extension=setmetatable({is_within_default_view=function(_,point)
+        return extension.is_within_default_view(view,point)
+    end},{__index=function(_,key)
+        local value=extension[key]
+        if type(value)=="function" then return function(_,...) return value(extension,...) end end
+        return value
+    end})
+    local result=packed(pcall(func,action,...))
+    action._first_person_extension=extension
+    if not result[1] then error(result[2],0) end
+    return unpack(result,2,result.n)
+end
+
 function controller_aim.install(mod, presentation, state)
     if controller_aim.installed then
         return controller_aim
@@ -716,10 +736,20 @@ function controller_aim.install(mod, presentation, state)
         if not is_local_unit(action._player_unit) then
             return func(action, ...)
         end
+        local mode_allowed = state.authoring_enabled and
+            (presentation.is_controller_aim_mode and presentation.is_controller_aim_mode() or
+            (not presentation.is_controller_aim_mode and is_private_range()))
+        if not mode_allowed then
+            -- Private stock proving retains its simulation attack pose. Its
+            -- local view predicate still needs the head actually being rendered.
+            -- This grants no hand-authored action or remote mission authority.
+            if is_private_range() then return controller_aim.with_physical_view(action, func, ...) end
+            return func(action, ...)
+        end
         local _, rotation = controller_aim.target("dominant")
         local component = action._first_person_component
         if not rotation or not component then
-            return func(action, ...)
+            return controller_aim.with_physical_view(action, func, ...)
         end
         -- Keep the authored sweep's origin/reach and animation timing. Only
         -- its orientation follows the hand; movement's shared component is
@@ -736,30 +766,26 @@ function controller_aim.install(mod, presentation, state)
                 Vector3.x(hand_forward), Vector3.y(hand_forward), Vector3.z(hand_forward),
                 Vector3.x(head_forward), Vector3.y(head_forward), Vector3.z(head_forward))
         end
-        local extension = action._first_person_extension
-        if extension and extension.is_within_default_view then
-            local view = setmetatable({
-                _first_person_component = setmetatable({
-                    position = component.position, rotation = rotation,
-                }, {__index = component}),
-            }, {__index = extension})
-            action._first_person_extension = setmetatable({
-                is_within_default_view = function(_, position)
-                    return extension.is_within_default_view(view, position)
-                end,
-            }, {__index = function(_, key)
-                local value = extension[key]
-                if type(value) == "function" then
-                    return function(_, ...) return value(extension, ...) end
-                end
-                return value
-            end})
-        end
-        local results = packed(pcall(with_first_person_pose,
-            action, component.position, rotation, func, ...))
-        action._first_person_extension = extension
-        if not results[1] then error(results[2], 0) end
-        return unpack(results, 2, results.n)
+        -- The weapon follows its hand, but the native default-view cone must
+        -- follow the rendered head. A stale simulation look or the weapon's
+        -- own rotation can reject a contact visible in VR (or admit one behind
+        -- the head). Keep the predicate itself native and the shared component
+        -- untouched. Missing fresh tracking retains the stock view pose.
+        local view_position, view_rotation
+        if presentation.eye_pose then view_position, view_rotation = presentation.eye_pose(nil) end
+        view_position, view_rotation = view_position or component.position, view_rotation or component.rotation
+        return with_view_pose(action,view_position,view_rotation,function(native,...)
+            return with_first_person_pose(native,component.position,rotation,func,...)
+        end,...)
+    end
+
+    function controller_aim.with_physical_view(action,func,...)
+        if action._unit_data_extension and action._unit_data_extension.is_resimulating then return func(action,...) end
+        if not is_local_unit(action._player_unit) or not presentation.eye_pose then return func(action,...) end
+        -- nil requests the fresh rendered eye only; no stale unit fallback.
+        local position,rotation=presentation.eye_pose(nil)
+        if not position or not rotation then return func(action,...) end
+        return with_view_pose(action,position,rotation,func,...)
     end
 
     for _, entry in ipairs({
@@ -771,10 +797,14 @@ function controller_aim.install(mod, presentation, state)
         local observe_start = entry[1] == "action_sweep" and entry[2] == "start"
         mod:hook(require("scripts/extension_systems/weapon/actions/" .. entry[1]),
             entry[2], function(func, self, ...)
+                local physical=presentation.physical_melee
+                if entry[1]=="action_sweep" and entry[2]=="_update_sweep" and physical and
+                        controller_aim.with_physical_view(self,physical.update_sweep,...) then return end
                 if not observe_start then
                     return controller_aim.with_melee_aim(self, func, ...)
                 end
                 local result = packed(controller_aim.with_melee_aim(self, func, ...))
+                if physical then physical.on_start(self,...) end
                 local preview = presentation.melee_preview
                 if preview and preview.on_action_start then
                     local ok, err = pcall(preview.on_action_start, self, ...)
@@ -785,6 +815,50 @@ function controller_aim.install(mod, presentation, state)
                 return unpack(result, 1, result.n)
             end)
     end
+    local physical_sweep=require("scripts/extension_systems/weapon/actions/action_sweep")
+    -- ActionHandler depends on NetworkConstants, which the game initializes
+    -- after DMF startup. Let DMF attach when the native class is available.
+    mod:hook("ActionHandler","_validate_single_chain_action",function(func,self,chain,t,...)
+        local physical=presentation.physical_melee
+        local selected=physical and physical.select_chain and physical.select_chain(self,chain,t,...) or chain
+        local valid,name,settings,reset=func(self,selected,t,...)
+        if valid and physical and physical.allow_chain and not physical.allow_chain(self,chain,t) then valid=false end
+        return valid,name,settings,reset
+    end)
+    mod:hook(physical_sweep,"finish",function(func,self,reason,data,t,...)
+        local physical=presentation.physical_melee
+        local before,err=true
+        if physical then before,err=pcall(physical.on_finish,self,t) end
+        local result=packed(pcall(func,self,reason,data,t,...))
+        local after,after_err=true
+        if physical and physical.after_finish then after,after_err=pcall(physical.after_finish,self) end
+        if not before then error(err,0) end
+        if not result[1] then error(result[2],0) end
+        if not after then error(after_err,0) end
+        return unpack(result,2,result.n)
+    end)
+    for _,event in ipairs({"_exit_damage_window","_handle_exit_procs"}) do
+        mod:hook(physical_sweep,event,function(func,self,...)
+            local physical=presentation.physical_melee
+            if physical and physical.native_event and physical.native_event(self,event,func,...) then return end
+            return func(self,...)
+        end)
+    end
+    mod:hook(physical_sweep,"_start_hit_stickyness",function(func,self,settings,t,direction,...)
+        local physical=presentation.physical_melee
+        if physical then direction=physical.hit_direction(self) or direction end
+        return func(self,settings,t,direction,...)
+    end)
+    mod:hook(physical_sweep,"_process_hit",function(func,self,t,unit,actor,hits,settings,position,direction,zone,...)
+        local physical=presentation.physical_melee
+        if physical then
+            if physical.before_hit(self,unit)==false then return false,false end
+            direction=physical.hit_direction(self) or direction
+        end
+        local aborted,armor=func(self,t,unit,actor,hits,settings,position,direction,zone,...)
+        if physical then physical.after_hit(self,aborted) end
+        return aborted,armor
+    end)
 
     function controller_aim.with_dominant_aim(action, func, ...)
         if not is_local_unit(action._player_unit) then

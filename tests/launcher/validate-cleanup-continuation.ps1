@@ -48,6 +48,9 @@ function Clear-PsykhaniumLaunchRequest { param($Request) $script:events.Add('ret
 # Dot-sourced by the launcher at load; the extracted finally block only sees mocks.
 function Restore-CleanLaunchDiagnostics { param($Saved) $script:events.Add('restore-diagnostics') }
 $characterStartFlag='locked-start-request'
+$externalViewerFlag='external-viewer-flag'
+$externalViewerExisted=$true
+$externalViewerOriginal=[Text.Encoding]::ASCII.GetBytes('prior-viewer-state')
 $gameplayInputFlagPath='gameplay-flag'; $gameplayInputFlagOriginal=[Text.Encoding]::ASCII.GetBytes('enabled')
 $xrLaunchOwnsGame=$true; $xrRunnerStarted=$true; $offlineNoHeadset=$false
 $preLaunchGameProcessIds=[Collections.Generic.HashSet[int]]::new(); [void]$preLaunchGameProcessIds.Add(90)
@@ -57,6 +60,9 @@ $launchFailure=$null
 $caught=$null
 try { & $cleanup } catch { $caught=$_ }
 if (-not $caught -or $caught.ToString() -notmatch 'start request is locked') { throw 'Cleanup failure was hidden.' }
+if (-not $script:events.Contains('restore:external-viewer-flag=prior-viewer-state')) {
+    throw 'External viewer ownership was not restored before later cleanup failed.'
+}
 foreach ($expected in @('restore:gameplay-flag=enabled','stop:91','retire-request')) {
     if (-not $script:events.Contains($expected)) { throw "Early cleanup failure skipped $expected" }
 }

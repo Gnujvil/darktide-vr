@@ -19,8 +19,10 @@ local names = {
     "darktidevr_performance_profile.flag",
     "darktidevr_offline_dual_view.flag",
     "darktidevr_billboard_draw_census.flag",
+    "darktidevr_single_submission.flag",
+    "darktidevr_stock_queue_capture.flag",
 }
-for mask = 0, 255 do
+for mask = 0, 1023 do
     files = {}
     local selected = {}
     for i, name in ipairs(names) do
@@ -34,6 +36,8 @@ for mask = 0, 255 do
     assert(state.pixel_probe == selected[4] and state.pass_trace == selected[5])
     assert(state.performance_profile == (selected[6] or selected[5]))
     assert(state.offline_dual_view == selected[7])
+    assert(state.single_submission == selected[9])
+    assert(state.stock_queue_capture == selected[10])
 end
 for _, case in ipairs({
     {" \tENABLED\r\n", true}, {"enabled" .. string.rep(" ", 24), true},
@@ -46,6 +50,8 @@ for _, case in ipairs({
     assert(state.pixel_probe == case[2] and state.pass_trace == case[2])
     assert(state.draw_census == case[2])
     assert(state.performance_profile == case[2] and state.offline_dual_view == case[2])
+    assert(state.single_submission == case[2])
+    assert(state.stock_queue_capture == case[2])
 end
 assert(opened == closed, "startup flag reader leaked a file")
-print("native_startup=pass combinations=256 bounded_ascii_flags file_lifetime")
+print("native_startup=pass combinations=1024 bounded_ascii_flags file_lifetime")

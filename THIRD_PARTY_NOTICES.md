@@ -1,5 +1,20 @@
 # Third-party notices
 
+## Heft held-body physics
+
+The melee inertia core includes `cleanroom/heft/heft.h` and `heft.cpp` from
+BodyWalkVR's Diablo II VR repository, revision
+`2869feb6ef41995a785f9b5bc26ea7564974f943`.
+
+- Source: <https://github.com/natpoh/diablo2-vr-port>
+- Copyright (c) 2026 BodyWalkVR
+- License: MIT, preserved at `src/melee_inertia/vendor/heft/LICENSE` and copied
+  alongside the built library as `HEFT-LICENSE.txt`.
+
+The upstream solver is preserved unchanged. Darktide-specific profiles,
+recovery control, coordinate conventions, tracking resets and pose limits live
+in the surrounding adapter.
+
 ## Khronos OpenXR SDK
 
 The build fetches and compiles the official Khronos OpenXR SDK loader from

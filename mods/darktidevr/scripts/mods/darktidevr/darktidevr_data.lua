@@ -153,6 +153,13 @@ return {
                 },
             },
             {
+                setting_id = "melee_options",
+                type = "group",
+                sub_widgets = {
+                    {setting_id = "vr_pose_block", type = "checkbox", default_value = false},
+                },
+            },
+            {
                 setting_id = "body_options",
                 type = "group",
                 sub_widgets = {

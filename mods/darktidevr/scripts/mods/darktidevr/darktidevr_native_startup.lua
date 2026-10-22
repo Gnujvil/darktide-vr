@@ -30,6 +30,8 @@ function Startup.read(open)
         pass_trace = pass_trace,
         performance_profile = enabled("darktidevr_performance_profile.flag") or pass_trace,
         offline_dual_view = enabled("darktidevr_offline_dual_view.flag"),
+        single_submission = enabled("darktidevr_single_submission.flag"),
+        stock_queue_capture = enabled("darktidevr_stock_queue_capture.flag"),
     }
 end
 

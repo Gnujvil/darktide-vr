@@ -3299,7 +3299,7 @@ local function apply_head_tracking(clean_position, clean_rotation)
              sequence - presentation.head_translation_trace_last_sequence >=
                 presentation.head_translation_trace_interval) then
         mod:info(
-            "DARKTIDEVR_STEREO head_translation sequence=%d delta=%.5f,%.5f,%.5f body_follow=%.5f,%.5f,%.5f clean=%.5f,%.5f,%.5f tracked=%.5f,%.5f,%.5f",
+            "DARKTIDEVR_STEREO head_translation sequence=%d delta=%.5f,%.5f,%.5f body_follow=%.5f,%.5f,%.5f clean=%.5f,%.5f,%.5f tracked=%.5f,%.5f,%.5f floor_eye_m=%.5f calibrated_eye_m=%.5f origin_error_m=%.5f",
             sequence,
             tonumber(head_pose_values[0]) * character_scale,
             tonumber(head_pose_values[1]) * character_scale,
@@ -3309,7 +3309,10 @@ local function apply_head_tracking(clean_position, clean_rotation)
             controller_observation.body_follow_z * character_scale,
             Vector3.x(clean_position), Vector3.y(clean_position),
             Vector3.z(clean_position), Vector3.x(tracked_position),
-            Vector3.y(tracked_position), Vector3.z(tracked_position))
+            Vector3.y(tracked_position), Vector3.z(tracked_position),
+            tonumber(head_pose_values[24]) or -1, presentation.calibrated_eye_height() or -1,
+            presentation.calibrated_eye_height() and tonumber(head_pose_values[24])>0 and
+                presentation.calibrated_eye_height()-(tonumber(head_pose_values[24])-tonumber(head_pose_values[1])) or 0)
         presentation.head_translation_trace_last_sequence = sequence
     end
 
@@ -3363,6 +3366,8 @@ function presentation.refresh_performance_profile_request()
     performance_profile_requested = startup.performance_profile
     presentation.performance_pass_trace_requested = startup.pass_trace
     presentation.offline_dual_view_requested = startup.offline_dual_view
+    presentation.single_submission_probe_requested = startup.single_submission
+    presentation.stock_queue_capture_requested = startup.stock_queue_capture
     presentation.billboard_pixel_shader_probe_requested = startup.pixel_probe
     mod:info(
         "DARKTIDEVR_PERF profile_enabled=%s pass_trace=%s offline_dual_view=%s pixel_probe=%s diagnostic_hooks=%s vertex_dump=%s substitution=%s draw_census=%s",
@@ -4058,6 +4063,10 @@ local function setup(manager)
     local world = manager._world
 
     if not world or not ScriptWorld.has_viewport(world, primary_viewport_name) then
+        if presentation.offline_dual_view_requested and not presentation.offline_missing_viewport_logged then
+            presentation.offline_missing_viewport_logged = true
+            mod:info("DARKTIDEVR_OFFLINE setup_wait reason=missing_player_viewport world=%s", tostring(world))
+        end
         return false
     end
 
@@ -4094,6 +4103,12 @@ local function setup(manager)
         inherit_viewport_metadata_mode
 
     if not shading_environment_name then
+        if presentation.offline_dual_view_requested and not presentation.offline_missing_shading_logged then
+            presentation.offline_missing_shading_logged = true
+            mod:info("DARKTIDEVR_OFFLINE setup_wait reason=missing_default_shading_environment_name current=%s callback=%s layer=%s",
+                tostring(Viewport.get_data(primary, "shading_environment")),
+                tostring(primary_shading_callback), tostring(primary_layer))
+        end
         return false
     end
 
@@ -5345,7 +5360,8 @@ function presentation.roomscale_anchor_offset(unit, rotation)
         tonumber(head_pose_sequence[0]), Managers.time:time("main"),
         tonumber(head_pose_values[20]), tonumber(head_pose_values[22]),
         tonumber(head_pose_values[1]), tonumber(head_pose_values[24]),
-        presentation.calibrated_character_scale(player), Quaternion.yaw(rotation))
+        presentation.calibrated_character_scale(player), Quaternion.yaw(rotation),
+        presentation.calibrated_eye_height())
     return Vector3(x, y, z)
 end
 
@@ -6876,14 +6892,24 @@ function presentation.inject_gameplay_input(self, main_t, input)
         profile.section("input.tag_gesture", presentation.tag_gesture.apply, player_unit,
             controller_observation.gameplay_input_active and game_mode_name~="hub", main_t)
     end
+    local testlab_held=tonumber(controller_observation.gameplay_held[0])
+    local testlab=get_mod("darktide_testlab")
+    if testlab and testlab.controller_input then
+        testlab_held=testlab.controller_input(testlab_held,controller_observation.gameplay_input_active and
+            not presentation.gameplay_context.ui_blocks_gameplay(Managers.ui),main_t)
+    end
     local exclusive_stick=profile.section("input.communication",presentation.communication_input.sample,self,player_unit,input,
         controller_observation.gameplay_input_active,
-        tonumber(controller_observation.gameplay_held[0]),game_mode_name,active_world)
+        testlab_held,game_mode_name,active_world)
     -- The radial owns the stick while it is open, as the comms wheel does.
     if presentation.item_radial and presentation.item_radial.open() then exclusive_stick=true end
     presentation.apply_controller_turning(main_t,exclusive_stick)
     local support_request=presentation.two_hand and profile.section("input.two_hand",presentation.two_hand.sample,
         player_unit,controller_observation.gameplay_input_active,main_t,self)
+    if presentation.physical_melee then
+        support_request=presentation.physical_melee.support_request(player_unit,
+            controller_observation.gameplay_input_active) or support_request
+    end
     local holster_request=false
     if presentation.holsters then
         -- The hub has nothing to wield; its grip opens the inventory.
@@ -6906,7 +6932,7 @@ function presentation.inject_gameplay_input(self, main_t, input)
     if type(support_request)=='table' then support_request.now=main_t end
     local pressed, held, released = profile.section("input.bindings",presentation.controller_bindings.sample,
         controller_observation.gameplay_input_active,
-        tonumber(controller_observation.gameplay_held[0]),
+        testlab_held,
         controller_observation.right_stick_x,controller_observation.right_stick_y,
         controller_observation.right_aim_usable,
         controller_observation.last_transport_generation, game_mode_name,support_request,exclusive_stick)
@@ -6924,6 +6950,10 @@ function presentation.inject_gameplay_input(self, main_t, input)
         local idle = presentation.holsters and presentation.holsters.idle_grip
         presentation.two_hand.finish((holster_request or radial_request) and idle or
             presentation.controller_bindings.support_grip)
+    end
+    if presentation.physical_melee then
+        presentation.physical_melee.finish_grip(not (holster_request or radial_request) and
+            presentation.controller_bindings.support_grip or false)
     end
     if presentation.haptics then
         profile.section("input.haptics", pcall, presentation.haptics.sample,
@@ -7007,6 +7037,7 @@ mod:hook_safe(
     require("scripts/managers/player/player_game_states/human_input_handler"),
     "fixed_update",
     function(self, dt, t, frame, input)
+        if presentation.physical_melee then presentation.physical_melee.pre_fixed(self,dt,t,frame,input) end
         if self ~= presentation.gameplay_input_owner[1] or
                 presentation.gameplay_input_owner[2] == nil or
                 presentation.gameplay_context.local_input_unit(
@@ -7154,6 +7185,7 @@ mod:hook_safe(
         end
         -- Finalize the same cached input columns consumed by local simulation
         -- and the stock network sender, after the controller adapter above.
+        if presentation.physical_melee then presentation.physical_melee.fixed_update(self,dt,t,frame,input) end
         presentation.online_rules.capture(self, frame, dt, t)
         presentation.apply_keyboard_mouse_roll_input(self, frame)
         if not controller_observation.primary_action_injected then
@@ -8722,6 +8754,10 @@ function presentation.scene_graph_root(unit, node)
 end
 
 function presentation.controller_grip_target()
+    if presentation.physical_melee then
+        local p,q=presentation.physical_melee.world_grip("right")
+        if p then return p,q end
+    end
     -- Disabled controllers are ignored wherever they are tracked, as are enabled
     -- ones for a few seconds after keyboard or mouse use.
     if presentation.controllers_suppressed() or not controller_observation.right_grip_usable or
@@ -8753,6 +8789,10 @@ function presentation.controller_grip_target()
 end
 
 function presentation.left_controller_grip_target()
+    if presentation.physical_melee then
+        local p,q=presentation.physical_melee.world_grip("left")
+        if p then return p,q end
+    end
     if presentation.controllers_suppressed() or not controller_observation.left_grip_usable or
             not controller_observation.body_anchor_qw then
         return nil, nil
@@ -9071,6 +9111,10 @@ function presentation.body_ik_controller_grip_target(unit, side)
             not controller_observation.body_anchor_qw or
             not Unit.has_node(unit, "j_head") then
         return nil
+    end
+    if presentation.physical_melee then
+        local p,q=presentation.physical_melee.world_grip(side)
+        if p then return p,q end
     end
     local is_left = side == "left"
     if is_left and not controller_observation.left_grip_usable then
@@ -11165,7 +11209,8 @@ function presentation.apply_body_ik(unit, sequence, world, anchor_unit)
     -- the time, turned onto the mouse aim, so the hands keep the stock idle,
     -- reload, attack and switch animations instead of freezing.
     local keyboard_mouse_hands = presentation.keyboard_mouse_hands()
-    if controller_observation.stock_melee_animation_active or keyboard_mouse_hands then
+    if (controller_observation.stock_melee_animation_active and not
+            (presentation.physical_melee and presentation.physical_melee.active())) or keyboard_mouse_hands then
         -- This frame's anchor: the tracked arms and full-body paths refresh it,
         -- this one did not, so displays placed after it used last frame's
         -- (animation audit, 16 September, item D).
@@ -12555,6 +12600,9 @@ mod:hook_safe(
             player_unit)
         if ok and presentation.gun_aim then
             presentation.frame_profile.section("draw.gun_aim", presentation.gun_aim.update, self._world, player_unit)
+        end
+        if ok and presentation.physical_melee then
+            presentation.frame_profile.section("post.physical_melee",presentation.physical_melee.apply_visual,self._world,player_unit)
         end
         if presentation.weapon_parked_parts then
             presentation.weapon_parked_parts.update(player_unit)
@@ -14090,6 +14138,13 @@ presentation.hook_legacy_menu(
     end)
 
 mod:hook_safe("CameraManager", "_update_camera", function(self, _, _, viewport_name)
+    if presentation.offline_dual_view_requested and
+            (presentation.offline_camera_hook_logs or 0) < 3 then
+        presentation.offline_camera_hook_logs =
+            (presentation.offline_camera_hook_logs or 0) + 1
+        mod:info("DARKTIDEVR_OFFLINE camera_hook viewport=%s expected=%s world=%s",
+            tostring(viewport_name), tostring(primary_viewport_name), tostring(self._world))
+    end
     if viewport_name ~= primary_viewport_name then
         return
     end
@@ -15018,6 +15073,47 @@ local function update_ui_offscreen_trace()
     end
 end
 
+-- Opt-in comparison: leave the stock renderer's per-viewport traversal intact.
+-- No native update bypass and no active-viewport mutation between eye calls.
+if presentation.stock_queue_capture_requested then
+    presentation.stock_queue_capture = mod:io_dofile(
+        "darktidevr/scripts/mods/darktidevr/darktidevr_render_queue_capture").new({
+        left_first=true,
+        before_eye=function(eye,camera)
+            if eye==1 and stereo_world_markers_requested then
+                local ok,err=pcall(function()
+                    presentation.marker_gui.hide()
+                    if not presentation.marker_reprojection_probe_disabled then
+                        enqueue_world_markers_for_camera(camera)
+                    end
+                end)
+                if not ok then
+                    world_marker_reprojecting=false
+                    stereo_world_markers_requested=false
+                    mod:error("DARKTIDEVR_STEREO marker_reprojection_failed error=%s",tostring(err))
+                end
+            end
+            if ui_reset_dlss_each_eye_requested then Application.reset_dlss() end
+            local target=tonumber(ui_native_capture.dtvr_boundary_eye_capture_count(eye))+1
+            report_native_capture_result(arm_eye_capture(eye))
+            presentation.trace_body_capture_boundary(eye==0 and "before_left" or "before_right")
+            return target
+        end,
+        after_eye=function(eye,target)
+            if ui_direct_swapchain_capture_requested then
+                report_native_capture_result(ui_native_capture.dtvr_capture_armed_swapchain_eye(eye))
+            elseif ui_native_sync_requested then
+                wait_for_eye_capture(eye,target)
+            end
+            presentation.trace_body_capture_boundary(eye==0 and "after_left" or "after_right")
+        end,
+        reset=function() ui_native_capture.dtvr_reset_eye_capture_tags() end,
+    })
+    mod:hook(Application,"render_world",function(func,world,camera,viewport,shading,...)
+        return presentation.stock_queue_capture.native(func,world,camera,viewport,shading,...)
+    end)
+end
+
 -- Level stories can animate the menu camera after UIWorldSpawner.update. Copy
 -- the final primary pose at the last reliable boundary before the world is
 -- submitted, so the duplicate cannot lag or remain at its creation pose.
@@ -15101,6 +15197,19 @@ mod:hook(ScriptWorld, "render", function(func, world, ...)
             ui_native_sync_initialized = true
         end
 
+        if presentation.stock_queue_capture and presentation.stock_queue_capture_requested then
+            assert(not presentation.single_submission_probe_requested and
+                not presentation.reverse_eye_order_probe_requested,
+                "stock_queue_capture requires an unmodified two-viewport queue")
+            ScriptWorld.activate_viewport(world,primary)
+            ScriptWorld.activate_viewport(world,right)
+            if not presentation.stock_queue_capture_logged then
+                presentation.stock_queue_capture_logged=true
+                mod:info("DARKTIDEVR_RENDER second_eye_path=stock_queue_capture diagnostic=true")
+            end
+            return presentation.stock_queue_capture.run(world,primary,right,func,...)
+        end
+
         ScriptWorld.activate_viewport(world, first)
         ScriptWorld.deactivate_viewport(world, second)
         if ui_reset_dlss_each_eye_requested then
@@ -15122,6 +15231,21 @@ mod:hook(ScriptWorld, "render", function(func, world, ...)
             )
         elseif ui_native_sync_requested then
             wait_for_eye_capture(first_eye, left_target)
+        end
+
+        -- Diagnostic only: one engine submission, no second capture arm.
+        -- The desktop consumer is absent; this is never stereo acceptance.
+        if presentation.single_submission_probe_requested then
+            if not presentation.single_submission_probe_logged then
+                presentation.single_submission_probe_logged = true
+                mod:info("DARKTIDEVR_RENDER second_eye_path=skipped diagnostic=single_submission")
+            end
+            ScriptWorld.activate_viewport(world, primary)
+            record_render_timings("gameplay",
+                left_start and left_end and left_end - left_start or nil, nil,
+                pair_start and left_end and left_end - pair_start or nil)
+            report_native_observer()
+            return result
         end
 
         ScriptWorld.deactivate_viewport(world, first)
@@ -15710,11 +15834,29 @@ presentation.melee_live_probe = mod:io_dofile(
     "darktidevr/scripts/mods/darktidevr/darktidevr_melee_live_probe"
 ).install(mod, presentation, controller_observation, active_game_mode_name)
 
+presentation.physical_melee = mod:io_dofile(
+    "darktidevr/scripts/mods/darktidevr/darktidevr_melee_tracking"
+).install(mod, presentation, controller_observation, active_game_mode_name)
+
 presentation.melee_preview = mod:io_dofile(
     "darktidevr/scripts/mods/darktidevr/darktidevr_melee_preview_display"
 ).install(mod, presentation, controller_observation)
 
 mod.update = function()
+    if presentation.offline_dual_view_requested and not presentation.offline_camera_state_logged and
+            Managers and Managers.state and Managers.state.game_mode and
+            Managers.state.game_mode:game_mode_name() == "shooting_range" then
+        presentation.offline_camera_state_logged = true
+        local camera = Managers.state.camera
+        local names = {}
+        if camera and type(camera._viewports) == "table" then
+            for name in pairs(camera._viewports) do names[#names + 1] = tostring(name) end
+        end
+        mod:info("DARKTIDEVR_OFFLINE camera_state manager=%s world=%s viewports=%s requested=%s active=%s failed=%s",
+            tostring(camera), tostring(camera and camera._world), table.concat(names, ","),
+            tostring(requested), tostring(active), tostring(failed))
+    end
+    presentation.physical_melee.update()
     presentation.melee_preview.update()
     if presentation.viewer then
         presentation.viewer.update()
@@ -16876,6 +17018,9 @@ presentation.session_control = mod:io_dofile(
 -- screen, or loading) releases what the atlas and the HUD panel's mirrored
 -- elements hold before the mission's packages unload.
 mod.on_game_state_changed = function(status, state_name)
+    if status=="exit" and state_name=="StateGameplay" and presentation.physical_melee then
+        presentation.physical_melee.stop("level_exit")
+    end
     -- The game is quitting (window close or the Quit button): StateGame exits
     -- before the gameplay state and long before engine teardown.
     if status == "exit" and state_name == "StateGame" and presentation.prepare_game_exit then
@@ -16966,6 +17111,7 @@ mod.on_disabled = function()
 end
 
 mod.on_unload = function()
+    if presentation.physical_melee then presentation.physical_melee.stop("unload") end
     presentation.marker_metrics.stop()
     pcall(presentation.communication_input.cancel)
     presentation.push_to_talk.cancel()

@@ -120,6 +120,7 @@ function Plan.make(sample, limits)
     -- This is a spacing bound, NOT proof of exact rotating-box collision coverage.
     -- The physics adapter must validate thin-target contacts between samples.
     local segments = math.max(1, math.ceil(sample.radius * sample.angle / limits.arc_step))
+    result.required_segments = segments
     if segments > limits.max_segments then
         -- Never silently coarsen a fast swing into an inaccurate long sweep.
         -- Keep current overlap; report the dropped history for diagnostic tuning.

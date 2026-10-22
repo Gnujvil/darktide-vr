@@ -1,0 +1,4 @@
+https://github.com/natpoh/diablo2-vr-port
+revision=2869feb6ef41995a785f9b5bc26ea7564974f943
+paths=cleanroom/heft/heft.h,cleanroom/heft/heft.cpp
+license=MIT; Copyright (c) 2026 BodyWalkVR

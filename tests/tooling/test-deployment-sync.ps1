@@ -12,6 +12,7 @@ $modRelative = 'mods\darktidevr'
 $luaRelative = $modRelative + '\scripts\mods\darktidevr'
 $lock = $null
 $global:DeploymentFixtureGateFailure = $false
+$global:DeploymentFixtureInertiaFailure = $false
 function Get-Process {
     [CmdletBinding()]param([string] $Name)
     if ($Name -ne 'Darktide') { throw 'Unexpected process query in sync fixture.' }
@@ -55,6 +56,16 @@ param([string] $SourcePath)
 if (-not (Test-Path -LiteralPath $SourcePath)) { throw 'Missing fixture source.' }
 if ($global:DeploymentFixtureGateFailure) { throw 'fixture syntax gate failed' }
 '@
+    # Native compilation is tested separately. Keep its real sync call and
+    # payload transaction here, without invoking a compiler from this fixture.
+    Write-Fixture (Join-Path $tools 'build-melee-inertia.ps1') @'
+if ($global:DeploymentFixtureInertiaFailure) { throw 'fixture inertia build failed' }
+$global:LASTEXITCODE = 0
+'@
+    foreach ($name in @('darktidevr_melee_inertia.dll', 'HEFT-LICENSE.txt')) {
+        Write-Fixture (Join-Path $repo ('build/melee-inertia/' + $name)) ('new-' + $name)
+        Write-Fixture (Join-Path $game ($modRelative + '/bin/' + $name)) ('old-' + $name)
+    }
     foreach ($name in @('darktidevr.lua', 'module.lua')) {
         Write-Fixture (Join-Path $repo ($luaRelative + '\' + $name)) ('new-' + $name)
         Write-Fixture (Join-Path $game ($luaRelative + '\' + $name)) ('old-' + $name)
@@ -86,7 +97,13 @@ if ($global:DeploymentFixtureGateFailure) { throw 'fixture syntax gate failed' }
     Assert-Unchanged $before
     & $sync -GameRoot $game -BillboardShaderSubstitution:$false | Out-Null
     if ([IO.File]::ReadAllText((Join-Path $game ($luaRelative + '\module.lua'))) -ne 'new-module.lua') { throw 'Module was not deployed.' }
+    if (Test-Path -LiteralPath (Join-Path $game ($modRelative + '/bin/module.lua'))) { throw 'Lua module was deployed beside a DLL.' }
     if ([IO.File]::ReadAllText((Join-Path $game ($modRelative + '\bin\darktidevr_native_capture.dll'))) -ne 'new-darktidevr_native_capture.dll') { throw 'Native module was not deployed.' }
+    foreach ($name in @('darktidevr_melee_inertia.dll', 'HEFT-LICENSE.txt')) {
+        if ([IO.File]::ReadAllText((Join-Path $game ($modRelative + '/bin/' + $name))) -cne ('new-' + $name)) {
+            throw 'Melee inertia payload or licence was not deployed.'
+        }
+    }
     foreach ($entry in $dxcSpec.Files) {
         $installed = Join-Path $game ($modRelative + '\bin\' + $entry.InstalledName)
         if ([IO.File]::ReadAllText($installed) -cne ('fixture-' + $entry.Name)) { throw 'DXC runtime or notice was not deployed.' }
@@ -98,6 +115,13 @@ if ($global:DeploymentFixtureGateFailure) { throw 'fixture syntax gate failed' }
         if ([IO.File]::ReadAllText($path) -cne ($pair[1] + [Environment]::NewLine)) { throw "Runtime flag disagrees: $path" }
     }
     $before = Get-InstallationSnapshot
+    $global:DeploymentFixtureInertiaFailure = $true
+    $failed = $false
+    try { & $sync -GameRoot $game -BillboardShaderSubstitution:$false | Out-Null }
+    catch { $failed = $_.Exception.Message.Contains('fixture inertia build failed') }
+    if (-not $failed) { throw 'Sync bypassed a failed inertia build.' }
+    Assert-Unchanged $before
+    $global:DeploymentFixtureInertiaFailure = $false
     $runtimeDll = Join-Path $repo 'build/dependencies/dxc-runtime/dxcompiler.dll'
     Write-Fixture $runtimeDll 'changed-runtime'
     $failed = $false
@@ -148,7 +172,7 @@ if ($global:DeploymentFixtureGateFailure) { throw 'fixture syntax gate failed' }
     $before = Get-InstallationSnapshot
     & $sync -GameRoot $game -BillboardShaderSubstitution:$false -InitializeInstall | Out-Null
     Assert-Unchanged $before
-    # No compiler/build script exists here: the package path must use only the
+    # No shader compiler/build script exists here: the package path must use only the
     # verified shader and refuse mismatched production identities before writes.
     $shader = Join-Path $repo 'build\generated\billboard_shaders\vs-42e436fb1ef1b392.dxil'
     $shaderSource = Join-Path $tools 'particle-horizon-lock.vs.hlsl'
@@ -182,6 +206,7 @@ if ($global:DeploymentFixtureGateFailure) { throw 'fixture syntax gate failed' }
 } finally {
     if ($lock) { $lock.Dispose() }
     Remove-Variable -Name DeploymentFixtureGateFailure -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable -Name DeploymentFixtureInertiaFailure -Scope Global -ErrorAction SilentlyContinue
     $resolved = [IO.Path]::GetFullPath($testRoot)
     if (-not $resolved.StartsWith($tempBase + '\', [StringComparison]::OrdinalIgnoreCase) -or
             -not (Split-Path -Leaf $resolved).StartsWith('darktidevr-sync-test-')) {

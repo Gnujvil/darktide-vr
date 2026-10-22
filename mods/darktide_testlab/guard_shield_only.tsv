@@ -1,0 +1,9 @@
+# Body-local vertical guard, settle, coherent forward shove, release. Native stamina/action logs determine outcome.
+# t left_xyz left_xyzw right_xyz right_xyzw primary block left_grip right_grip
+0.00 -0.25 0.30 -0.35 0 0 0 1 0.20 0.30 -1.00 0 0 0 1 0 0 0 0
+0.20 -0.25 0.30 -0.35 0 0 0 1 0.20 0.30 -1.00 0 0 0 1 0 1 0 0
+1.00 -0.25 0.30 -0.35 0 0 0 1 0.20 0.30 -1.00 0 0 0 1 0 1 0 0
+1.25 -0.25 0.60 -0.35 0 0 0 1 0.20 0.60 -1.00 0 0 0 1 0 1 0 0
+1.60 -0.25 0.60 -0.35 0 0 0 1 0.20 0.60 -1.00 0 0 0 1 0 1 0 0
+1.80 -0.25 0.60 -0.35 0 0 0 1 0.20 0.60 -1.00 0 0 0 1 0 0 0 0
+2.00 -0.25 0.60 -0.35 0 0 0 1 0.20 0.60 -1.00 0 0 0 1 0 0 0 0

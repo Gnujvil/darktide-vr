@@ -713,6 +713,9 @@ bool install_ngx_output_probe(HMODULE capture_module, NgxSrEyeContextReader cont
   configure_generated_stereo(wait_for_stereo &&
       GetPrivateProfileIntW(L"probe", L"generated_stereo", 1, flag.c_str()) != 0);
   capture_window.configure(wait_for_stereo);
+  // The launcher writes an explicit all-off configuration for native stereo.
+  // Disabled probes must not inspect or hook a version-specific NGX runtime.
+  if (!wait_for_stereo && !observe_sr_inputs) return true;
   runtime = GetModuleHandleW(L"_nvngx.dll");
   if (!runtime) {
     if (!explicit_flag) {

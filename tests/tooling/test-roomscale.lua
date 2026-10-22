@@ -27,6 +27,27 @@ s.record(1200,false); s.moved(600,.5,0); near(s.x,-.1) -- expired frame
 s.record(1201,true); s.moved(1201,5,0); assert(s.owner==nil)
 print('PASS roomscale: tracking basis, vertical envelope, recenter, owner, replay, history expiry, teleport')
 
+do
+    local height=Roomscale.new()
+    -- The headset starts on a desk at 0.7 m, then is worn at 1.7 m.
+    -- Both the camera and the grip are anchored at the calibrated eye.
+    height.sample('player','unworn',1,0,0,0,0,.7,1,0,1.7)
+    near(1.7+height.z,.7)
+    height.sample('player','unworn',2,.02,0,0,1,1.7,1,0,1.7)
+    near(1.7+height.z+1,1.7) -- camera, no extra standing-height offset
+    near(1.7+height.z+.5,1.2) -- hand 0.5 m below the worn eye
+    height.sample('player','unworn',3,.04,0,0,.6,1.3,1,0,1.7)
+    near(1.7+height.z+.6,1.3) -- physical crouch stays real
+    height.sample('player','worn-recenter',4,.06,0,0,0,1.7,1,0,1.7)
+    near(1.7+height.z,1.7);near(1.7+height.z-.5,1.2)
+    height.sample('player','worn-recenter',5,.08,0,0,1.2,3.1,1.4,0,1.7)
+    near(1.7+height.z+1.2*1.4,1.7+(3.1-1.7)*1.4) -- sliding clamp + Ogryn scale
+    local prior=height.z
+    height.sample('player','worn-recenter',6,.1,0,0,1.2,0,1.4,0,1.7)
+    near(height.z,prior) -- lost STAGE holds the correction
+end
+print('PASS roomscale calibrated origin: unworn-to-worn camera+hand agreement, crouch, recenter, scale, STAGE loss')
+
 -- Execute the registered production locomotion hook. Core-state tests alone
 -- missed the real input-extension boundary: HumanUnitInput owns the frame.
 local main=assert(io.open(assert(arg[2]),'rb'))
@@ -79,3 +100,28 @@ body=.1
 hook(function() return {x=.2,y=0,z=0} end,ext,unit,1/60,2/60,{}, {},{x=.1,y=0,z=0},false,true,{})
 near(state.x,.2)
 print('PASS roomscale production hook: nested input frame, collider repayment, fixed visual head, replay and push')
+
+do
+    local p={online_rules={simulation_aim_active=function() return true end},
+        calibrated_character_scale=function() return 1.4 end,
+        calibrated_eye_height=function() return 1.7 end,read_head_pose=function() return 0 end}
+    p.head_pose_transport_generation={[0]=1}
+    p.roomscale=Roomscale.install(mod,p)
+    local observed={}
+    local code=assert(source:match('(function presentation.roomscale_anchor_offset.-\nend)'))
+    local unit={}
+    local chunk=assert(loadstring(code))
+    setfenv(chunk,setmetatable({presentation=p,controller_observation=observed,head_translation_requested=true,
+        head_pose_values={[1]=1,[20]=0,[22]=0,[23]=1,[24]=1.7},head_pose_sequence={[0]=1},
+        Managers={player={local_player=function() return {player_unit=unit} end},time={time=function() return 1 end}},
+        Vector3=setmetatable({zero=function() return {x=0,y=0,z=0} end},
+            {__call=function(_,x,y,z) return {x=x,y=y,z=z} end}),
+        Quaternion={yaw=function() return 0 end}},{__index=_G}))
+    chunk()
+    local offset=p.roomscale_anchor_offset(unit,{})
+    near(offset.z,-1.4)
+    near(2.2+offset.z+1*1.4,2.2) -- actual camera/hand anchor seam, Ogryn scale
+    p.online_rules.simulation_aim_active=function() return false end
+    near(p.roomscale_anchor_offset(unit,{}).z,-1.4) -- stock aim does not restore the bad origin
+end
+print('PASS roomscale production anchor forwards standing calibration; eyes/hands retain correction with stock aim')

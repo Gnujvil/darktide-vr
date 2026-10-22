@@ -137,3 +137,8 @@ target_link_libraries(darktidevr-buffer-address-lookup-tests PRIVATE darktidevr_
 target_compile_options(darktidevr-buffer-address-lookup-tests PRIVATE /W4 /WX /permissive-)
 target_compile_definitions(darktidevr-buffer-address-lookup-tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 add_test(NAME buffer_address_lookup COMMAND darktidevr-buffer-address-lookup-tests)
+
+add_executable(darktidevr-upload-flush-range-tests upload_flush_range.cpp)
+target_link_libraries(darktidevr-upload-flush-range-tests PRIVATE darktidevr_core)
+target_compile_options(darktidevr-upload-flush-range-tests PRIVATE /W4 /WX /permissive-)
+add_test(NAME upload_flush_range COMMAND darktidevr-upload-flush-range-tests)
