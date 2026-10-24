@@ -21,6 +21,8 @@ Quaternion={rotate=function(_,v) return v end,from_elements=function(...) return
     forward=function() return vector(0,1,0) end,look=function() return {} end}
 Actor={unit=function(actor) return actor.unit end}
 local unit,target={},{}
+-- The breed table the testlab captures at load; blocks below add breeds to it.
+local breeds_fixture={chaos_poxwalker={}}
 local player_position=vector(0,0,0)
 local target_removed=false
 local target_health_missing=false
@@ -89,6 +91,10 @@ local mod={io_dofile=function(_,path)
         if path:match('/buff_snapshot$') then return dofile(base..'/scripts/mods/darktide_testlab/buff_snapshot.lua') end
         if path:match('/threat$') then return dofile(base..'/scripts/mods/darktide_testlab/threat.lua') end
         if path:match('/observations$') then return dofile(base..'/scripts/mods/darktide_testlab/observations.lua') end
+        if path:match('/damage_ledger$') then return dofile(base..'/scripts/mods/darktide_testlab/damage_ledger.lua') end
+        if path:match('/anchor$') then return dofile(base..'/scripts/mods/darktide_testlab/anchor.lua') end
+        if path:match('/ranged_pose$') then return dofile(base..'/scripts/mods/darktide_testlab/ranged_pose.lua') end
+        if path:match('/ranged_sweep$') then return dofile(base..'/scripts/mods/darktide_testlab/ranged_sweep.lua') end
         if path:match('/targets$') then return dofile(base..'/scripts/mods/darktide_testlab/targets.lua') end
         if path:match('/inventory$') then return dofile(base..'/scripts/mods/darktide_testlab/inventory.lua') end
         if path:match('/loadout$') then return dofile(base..'/scripts/mods/darktide_testlab/loadout.lua') end
@@ -129,11 +135,14 @@ require=function(name)
     end} end
     if name=='scripts/utilities/weapon/weapon_template' then return {weapon_template_from_item=function(item) return item.weapon_template end} end
     if name:find('action_sweep_settings') then return {sweep_width_mod=1,sweep_height_mod=1,sweep_range_mod=1} end
-    if name:find('breeds') then return {chaos_poxwalker={}} end
+    if name:find('buff_templates') then return {havoc_no_stagger={keywords={'no_stagger'}}} end
+    if name:find('breeds') then return breeds_fixture end
     if name:find('nav_queries') then return {position_on_mesh=function(_,p) return p end} end
     return {}
 end
 local game_require=require
+-- These checks read per-frame diagnostics, which are written only verbose.
+files['verbose.flag']='enabled'
 dofile(base..'/scripts/mods/darktide_testlab/darktide_testlab.lua')
 require=native_require
 local function command(s) files['command.txt']=s; mod.update(.11) end
@@ -472,6 +481,70 @@ do
     target_removed=false;target_health=old_health
 end
 do
+    -- Damage ledger: what the run pressed, the native attacks that started,
+    -- and every hit the player's own attacks dealt (owned target or not).
+    target_health=100;target_removed=false
+    command('ledger_spawn spawn chaos_poxwalker 1.5')
+    command('ledger_run run horizontal.tsv')
+    assert(files['ack.tsv']:find('accepted'),files['ack.tsv'])
+    for i=0,8 do
+        hooks.fixed_update(function() end,self,.05,300+i*.05,3000000+i,{})
+        local cache={{},{},{}};safe._parse_input(self,cache,{},1)
+        safe._parse_input(self,cache,{},1) -- a second parse in one frame is not a second press
+    end
+    local swing={_player_unit=unit,_unit_data_extension={is_resimulating=false},
+        _weapon_action_component={current_action_name='light_attack_left'}}
+    safe.start(swing,{kind='sweep'},300.4)
+    local calls=0
+    local values={hooks.execute(function(attacked,profile,...)
+        calls=calls+1;assert(attacked==target and select('#',...)==8,'ledger changed native arguments')
+        target_health=60;return 40,'damaged',1,nil,true
+    end,target,{name='fixture_light'},'attacking_unit',unit,'attack_type','melee','hit_zone_name','head','is_critical_strike',false)}
+    assert(calls==1 and values[1]==40 and values[2]=='damaged' and values[4]==nil and values[5]==true,'ledger altered native attack returns')
+    local foreign={}
+    hooks.execute(function() calls=calls+1;return 0,'blocked' end,foreign,{name='fixture_light'},
+        'attacking_unit',unit,'attack_type','melee','hit_zone_name','torso')
+    assert(calls==2,'foreign hit was not passed to native exactly once')
+    hooks.execute(function() calls=calls+1;return 5,'damaged' end,target,{name='enemy_profile'},'attacking_unit',foreign)
+    hooks.finish(function() end,swing,'action_complete',nil,300.5)
+    safe.start(swing,{kind='sweep'},301.9) -- no press: a weapon special or an unprompted chain
+    hooks.finish(function() end,swing,'action_complete',nil,302)
+    command('ledger_stop stop')
+    local log=files['results.tsv']
+    local summary=assert(log:match('[^\n]*\tledger_run\tdamage_summary\t[^\n]*'),'damage summary missing')
+    assert(summary:find('presses=1 light=0 heavy=0 scripted=1 specials=0 pushes=0 cancelled=0 cancelled_attacked=0 attacks=2 attacks_pressed=1 attacks_unpressed=1 attacks_damaged=1 hits=2 damaging_hits=1 head_hits=1 weakspot_hits=1 critical_hits=0 kills=0 damage=40.000 presses_damaged=1 presses_no_damage=0',1,true),summary)
+    assert(log:find('ledger_run\tdamage_hit\thit=1 t=0.400 attack=1 action=light_attack_left target=ledger_spawn breed=nil',1,true) and
+        log:find('zone=head damage=40 result=damaged killed=false weakspot=true',1,true),'owned hit row missing')
+    assert(log:find('ledger_run\tdamage_hit\thit=2 t=0.400 attack=1 action=light_attack_left target=foreign',1,true),'foreign hit not ledgered')
+    assert(log:find('ledger_run\tdamage_press\tpress=1 t=0.200 kind=scripted released=0.250 attack=1 action=light_attack_left',1,true),'press row missing its attack')
+    assert(log:find('ledger_run\tdamage_attack\tattack=2 t=1.900 action=light_attack_left kind=sweep press=none',1,true),'unpressed attack row missing')
+    assert(select(2,log:gsub('\tledger_run\tdamage_hit\t',''))==2,'enemy attack on the target entered the player ledger')
+    command('ledger_reset reset')
+end
+do
+    -- wield: one stock wield press, delivered once, never during a replay.
+    command('wield_bad wield sideways')
+    assert(files['ack.tsv']:find('error'),'unknown wield slot accepted')
+    command('wield_ranged wield secondary')
+    assert(files['ack.tsv']:find('accepted'),files['ack.tsv'])
+    self._action_lookup.wield_2=5
+    local cache={{},{},{},{},{}};safe._parse_input(self,cache,{},1)
+    assert(cache[5][1]==true,'wield input not delivered')
+    local again={{},{},{},{},{}};safe._parse_input(self,again,{},1)
+    assert(again[5][1]==nil,'wield input repeated')
+    assert(files['results.tsv']:find('wield_ranged\twield_input\tinput=wield_2 delivered=true',1,true))
+    inventory.wielded_slot='slot_secondary';mod.update(.01)
+    assert(files['results.tsv']:find('wield_ranged\twield_complete\tslot=slot_secondary',1,true),'wield completion not observed')
+    inventory.wielded_slot='slot_primary'
+    command('sweep_primary rangedsweep')
+    assert(files['ack.tsv']:find('error') and files['ack.tsv']:find('wield the ranged slot first',1,true),'sweep ran from the melee slot')
+    require=game_require;command('sweep_list rangedsweep list');require=native_require
+    assert(files['ack.tsv']:find('accepted') and files['results.tsv']:find('sweep_list\tranged_template_count\ttemplates=0',1,true),
+        'read-only template listing failed')
+    command('sweep_cancel rangedsweep cancel')
+    assert(files['ack.tsv']:find('accepted'),'idle sweep cancel refused')
+end
+do
     group_mode=true
     command('group_spawn group chaos_poxwalker 3 1.5 0.6')
     assert(files['ack.tsv']:find('accepted') and #group_units==3,'bounded native group spawn failed')
@@ -700,4 +773,142 @@ do
     get_mod=saved_get_mod
     Managers.state.game_session=saved_session
 end
-print('testlab_integration=pass native_input_sweep group_identity per_target_cleave incoming_attack_resource_proc_observation native_threat_command stop_restores_exact_cache_and_owned_cleanup')
+do
+    -- Persistent sessions: quiet by default, readiness probe, module refresh.
+    mode='shooting_range';target_health=100;target_removed=false
+    command('quiet verbose off')
+    assert(files['ack.tsv']:find('accepted') and files['results.tsv']:find('quiet\tverbose\tenabled=false',1,true),'verbose verb')
+    command('quiet_spawn spawn chaos_poxwalker 1.5')
+    command('quiet_run run horizontal.tsv')
+    local before=files['tracking.tsv'] or ''
+    for i=0,6 do hooks.fixed_update(function() end,self,.05,400+i*.05,4000000+i,{});safe._parse_input(self,{{},{},{}},{},1) end
+    local probe={_player_unit=unit,_unit_data_extension={is_resimulating=false},
+        _weapon_action_component={time_scale=1,current_action_name='light'}}
+    hooks._do_overlap(function() return 'native' end,probe,400.3,vector(0,0,0),{},vector(0,1,0),{},false,{},1)
+    hooks._process_hit(function() return false,false end,probe,400.3,target,nil,{},{},nil,nil,'head')
+    command('quiet_stop stop')
+    local log=files['results.tsv']
+    local function rows(kind) return select(2,log:gsub('\tquiet_run\t'..kind..'\t','')) end
+    assert(rows('sweep')==0 and rows('query_geometry')==0 and rows('target_state')==0,'quiet run wrote per-frame rows')
+    assert((files['tracking.tsv'] or '')==before,'quiet run wrote tracking.tsv')
+    assert(rows('hit')==1 and rows('result')==1 and rows('damage_summary')==1,'quiet run lost per-hit or per-case rows')
+    command('ready_probe ping')
+    local pong=assert(files['results.tsv']:match('ready_probe\tpong\t([^\n]*)'),'ping did not answer')
+    assert(pong:find('range=true player=true',1,true) and pong:find('pinned_loaders=',1,true) and
+        pong:find('verbose=false',1,true) and pong:find('milestones=loaded:',1,true),pong)
+    files['melee_timing.lua']='abc'
+    command('refresh modules')
+    local want=string.format('poly131_%08x',((97*131+98)*131+99)%4294967296)
+    assert(files['results.tsv']:find('refresh\tmodule\tname=melee_timing refresh=live bytes=3 checksum='..want,1,true),'module checksum')
+    assert(files['results.tsv']:find('refresh\tmodule\tname=damage_ledger refresh=reload',1,true) and
+        files['results.tsv']:find('refresh\tmodules_refreshed\t',1,true),'module refresh report')
+    command('verbose_bad verbose loud')
+    assert(files['ack.tsv']:find('error'),'verbose accepted an unknown value')
+    command('quiet_reset reset')
+end
+do
+    -- Anchored, immortal, unstaggerable targets and the breed choice.
+    mode='shooting_range';group_mode=true;Managers.time={time=function() return 200 end}
+    breeds_fixture.chaos_plague_ogryn={breed_type='minion',base_unit='content/characters/enemy/chaos_plague_ogryn/third_person/base'}
+    breeds_fixture.renegade_captain={breed_type='minion',base_unit='content/characters/enemy/chaos_traitor_guard_captain/third_person/base'}
+    breeds_fixture.human={breed_type='player'}
+    local loaded={['content/characters/enemy/chaos_plague_ogryn/third_person/base']=true}
+    Application={can_get_resource=function(kind,name) assert(kind=='unit');return loaded[name]==true end}
+    local native={}
+    local spawned={}
+    local old_extension,old_position,old_rotation=ScriptUnit.has_extension,Unit.world_position,Unit.world_rotation
+    local old_spawn=Managers.state.minion_spawn.spawn_minion
+    Managers.state.minion_spawn.spawn_minion=function(_,breed,pos,rot)
+        local u={breed=breed}
+        local n={pos=pos,rot={},max=100,damage=0,buffs={},keyword_reads=0,teleports=0}
+        n.health={current_health=function() return math.max(0,n.max-n.damage) end,max_health=function() return n.max end,
+            set_unkillable=function(_,v) n.unkillable=v end,is_unkillable=function() return n.unkillable==true end,
+            set_health_instant=function(_,h) n.damage=n.max-h end}
+        n.buff={add_externally_controlled_buff=function(_,name,t) assert(t==200);n.buffs[name]=true;return false,1 end,
+            has_keyword=function(_,k) n.keyword_reads=n.keyword_reads+1;return k=='no_stagger' and n.buffs.havoc_no_stagger==true and n.keyword_reads>1 end}
+        n.locomotion={teleport_to=function(_,p,q) n.pos=p;n.teleports=n.teleports+1 end}
+        native[u]=n;spawned[#spawned+1]=u
+        return u
+    end
+    ScriptUnit.has_extension=function(owner,system)
+        local n=native[owner]
+        if n then
+            if system=='health_system' then return n.health end
+            if system=='buff_system' then return n.buff end
+            if system=='locomotion_system' then return n.locomotion end
+            if system=='unit_data_system' then return {breed=function() return {name=owner.breed} end} end
+        end
+        return old_extension(owner,system)
+    end
+    Unit.world_position=function(u) if native[u] then return native[u].pos end;return old_position(u) end
+    Unit.world_rotation=function(u) if native[u] then return native[u].rot end;return old_rotation and old_rotation(u) or {} end
+    local function ack() return files['ack.tsv'] end
+    command('breed_typo spawn chaos_plague_ogrin 2')
+    assert(ack():find('error') and ack():find('unknown_breed:chaos_plague_ogrin',1,true) and ack():find('renegade_captain',1,true),ack())
+    command('breed_player spawn human 2')
+    assert(ack():find('not_a_minion_breed:human',1,true),ack())
+    command('breed_unloaded spawn renegade_captain 2')
+    assert(ack():find('breed_not_loaded:renegade_captain',1,true) and ack():find('add force',1,true),ack())
+    command('breed_flag spawn chaos_poxwalker 2 glued')
+    assert(ack():find('spawn options are anchored and force, not glued',1,true),ack())
+    command('breed_attacker attacker 2 anchored')
+    assert(ack():find('error'),'attacker accepted extra words')
+    command('breed_forced spawn renegade_captain 2 force')
+    assert(ack():find('accepted') and spawned[#spawned].breed=='renegade_captain','force did not spawn the unloaded breed')
+    assert(not native[spawned[#spawned]].unkillable,'a plain spawn was made unkillable')
+    -- A boss, anchored.
+    require=game_require;command('boss spawn chaos_plague_ogryn 1.5 anchored');require=native_require
+    assert(ack():find('accepted'),ack())
+    local boss=spawned[#spawned];local n=native[boss]
+    assert(n.unkillable and n.buffs.havoc_no_stagger,'anchored boss not made unkillable and unstaggerable')
+    local log=files['results.tsv']
+    assert(log:find('boss\tspawn\ttarget=boss generation=',1,true) and log:find('breed=chaos_plague_ogryn',1,true) and log:find('anchored=true',1,true),'spawn row')
+    assert(log:find('anchor_adopted\ttarget=boss position=0.000,1.500,0.000 unkillable=true no_stagger_buff=true',1,true),'adoption row')
+    mod.update(.01);mod.update(.01)
+    assert(files['results.tsv']:find('anchor_ready\ttarget=boss unkillable=true no_stagger=true',1,true),'stagger guard not confirmed')
+    -- Pushed away: back at its spawn point within one update.
+    n.pos=vector(.6,2.4,0);mod.update(.01)
+    assert(n.teleports==1 and n.pos.x==0 and n.pos.y==1.5,'pushed boss not returned')
+    n.pos=vector(.02,1.5,0);mod.update(.01)
+    assert(n.teleports==1,'teleported inside the dead band')
+    -- A run: every hit lands in the ledger with its damage, then health returns.
+    command('boss_run run horizontal.tsv')
+    assert(ack():find('accepted'),ack())
+    for i=0,4 do hooks.fixed_update(function() end,self,.05,500+i*.05,5000000+i,{});safe._parse_input(self,{{},{},{}},{},1) end
+    local swing={_player_unit=unit,_unit_data_extension={is_resimulating=false},_weapon_action_component={current_action_name='light_attack_left'}}
+    safe.start(swing,{kind='sweep'},500.2)
+    local values={hooks.execute(function() n.damage=n.damage+60;return 60,'damaged',1,nil,false end,
+        boss,{name='fixture'},'attacking_unit',unit,'attack_type','melee','hit_zone_name','torso')}
+    assert(values[1]==60 and values[2]=='damaged','native returns changed')
+    assert(n.damage==0,'health not restored right after the hit')
+    hooks.execute(function() n.damage=n.damage+500;return 100,'died',1,nil,true end,
+        boss,{name='fixture'},'attacking_unit',unit,'attack_type','melee','hit_zone_name','head')
+    assert(n.damage==0 and Unit.alive(boss),'an over-health hit left the boss damaged or dead')
+    hooks.finish(function() end,swing,'action_complete',nil,500.4)
+    command('boss_stop stop')
+    log=files['results.tsv']
+    assert(log:find('boss_run\tdamage_hit\thit=1 t=',1,true) and log:find('target=boss breed=chaos_plague_ogryn',1,true) and
+        log:find('zone=torso damage=60 result=damaged killed=false weakspot=false critical=nil attack_type=melee damage_type=nil health_after=40',1,true),'ledger lost the damage')
+    assert(log:find('boss_run\tdamage_summary\t',1,true) and log:find('hits=2 damaging_hits=2 head_hits=1 weakspot_hits=1 critical_hits=0 kills=1 damage=160.000',1,true),'damage summary')
+    assert(log:find('boss_run\tanchor_result\ttarget=boss teleports=0 max_offset=0.020 max_angle=0.0 health_restores=2 health_restored=160.000 unkillable=true no_stagger=true',1,true),
+        'anchor share of the run')
+    -- A group, anchored; reset releases all of them.
+    require=game_require;command('pack group chaos_poxwalker 3 1.3 0.6 anchored');require=native_require
+    assert(ack():find('accepted'),ack())
+    command('pack_probe ping')
+    assert(files['results.tsv']:find('pack_probe\tpong\t[^\n]*anchored=3',1),'ping anchored count')
+    local first=native[spawned[#spawned-2]];first.pos=vector(3,3,0);first.damage=30;mod.update(.01)
+    assert(first.teleports==1 and first.damage==0,'group member not held')
+    command('pack_plain group chaos_poxwalker 3 1.3 0.6')
+    assert(ack():find('accepted') and not native[spawned[#spawned]].unkillable,'plain group anchored')
+    command('pack_probe2 ping')
+    assert(files['results.tsv']:find('pack_probe2\tpong\t[^\n]*anchored=0',1),'old anchors survived a new spawn')
+    command('anchored_close spawn chaos_poxwalker 0.9 anchored')
+    command('anchored_reset reset')
+    command('pack_probe3 ping')
+    assert(files['results.tsv']:find('pack_probe3\tpong\t[^\n]*anchored=0',1),'reset kept anchors')
+    ScriptUnit.has_extension,Unit.world_position,Unit.world_rotation=old_extension,old_position,old_rotation
+    Managers.state.minion_spawn.spawn_minion=old_spawn
+    Application=nil;group_mode=false
+end
+print('testlab_integration=pass native_input_sweep group_identity per_target_cleave incoming_attack_resource_proc_observation native_threat_command stop_restores_exact_cache_and_owned_cleanup damage_ledger wield_input ranged_sweep_guards quiet_mode ping modules anchored_targets breed_choice')

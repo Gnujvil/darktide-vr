@@ -1,7 +1,10 @@
 -- Controller aim owns direction; controller grip owns weapon placement.
 -- The animated hand model is never an input to gameplay aim or the grip target.
 local Alignment={}
-local guns={shoot_hit_scan=true,shoot_pellets=true,shoot_projectile=true}
+-- The flamer fires flamer_gas (PC audit, 22 October: it alone of the guns was
+-- left drawn by its stock animation, not the controller). Force staffs share
+-- the kind and stay excluded by keyword.
+local guns={shoot_hit_scan=true,shoot_pellets=true,shoot_projectile=true,flamer_gas=true,flamer_gas_burst=true}
 function Alignment.pitch(rotation,degrees)
     local half=math.rad(degrees)*0.5
     return Quaternion.multiply(rotation,Quaternion.from_elements(math.sin(half),0,0,math.cos(half)))
@@ -20,6 +23,34 @@ function Alignment.rotation(parent,attachment,muzzle,aim)
     return Quaternion.multiply(Quaternion.inverse(parent),
         Quaternion.multiply(aim,Quaternion.inverse(relative)))
 end
+-- The controller grip point moved so the levelled gun pivots at the drawn
+-- hand, not at its attach node: the hand (offset, in the attach frame) keeps
+-- its world position and only its roll changes (user, 22 October: the hand
+-- must stay on the controller).
+function Alignment.pivot(grip,aim,levelled,attach_to_muzzle,offset)
+    local inverse=Quaternion.inverse(attach_to_muzzle)
+    return grip+Quaternion.rotate(Quaternion.multiply(aim,inverse),offset)-
+        Quaternion.rotate(Quaternion.multiply(levelled,inverse),offset)
+end
+-- The gun's cant about its barrel, radians: where its grip (the attach node,
+-- in the muzzle's frame, x right and z up) sits around the bore, measured
+-- from straight below. Upright guns read 0 (shotgun, shield pistol); a model
+-- whose muzzle node is authored rolled reads its roll (autogun_p3: 45 deg,
+-- drawn canted CCW with the hands, worn 22 October).
+function Alignment.cant(grip_in_muzzle_x,grip_in_muzzle_z)
+    return math.atan2(grip_in_muzzle_x,-grip_in_muzzle_z)
+end
+-- The aim turned about its own forward axis by a cant, which brings the grip
+-- straight below the barrel: the gun is drawn upright in the hand.
+function Alignment.uncant(aim,cant)
+    return Quaternion.multiply(aim,Quaternion.from_elements(0,math.sin(cant*.5),0,math.cos(cant*.5)))
+end
+-- Below this a gun is upright already and left exactly as drawn.
+Alignment.CANT_TOLERANCE=math.rad(2)
+-- From this on the grip is not below the barrel at all: the weapon's own
+-- layout (the ogryn grenadier gauntlet's barrel under the fist reads 180 deg
+-- in the PC sweep, 22 October), drawn as aimed rather than turned over.
+Alignment.CANT_LIMIT=math.rad(90)
 local function same(a,b)
     local ax,ay,az,aw=Quaternion.to_elements(a)
     local bx,by,bz,bw=Quaternion.to_elements(b)
@@ -115,6 +146,33 @@ function Alignment.install(mod,presentation)
             local dt=now and instance.last_time and now-instance.last_time
             instance.last_time=now
             aim=presentation.gun_sights.drawn_rotation(unit,template.name,grip,aim,dt)
+        end
+        -- Draw every gun upright in the hand (user, 22 October: "switching
+        -- guns with the hand held still, the hand must not rotate"). The
+        -- grip's place around the bore is rigid per gun, so it is read from
+        -- the poses before this frame's write.
+        local grip_local=Matrix4x4.transform(Matrix4x4.inverse(Unit.world_pose(muzzle_unit,muzzle_node)),old_attach_position)
+        local gx,gz=Vector3.x(grip_local),Vector3.z(grip_local)
+        if gx==gx and gz==gz and gx*gx+gz*gz>.0004 then
+            local cant=Alignment.cant(gx,gz)
+            local canted=math.abs(cant)>Alignment.CANT_TOLERANCE and math.abs(cant)<Alignment.CANT_LIMIT
+            if instance.logged_cant~=template.name then
+                instance.logged_cant=template.name
+                mod:info('DARKTIDEVR_GUN_AIM cant template=%s deg=%.1f levelled=%s',tostring(template.name),math.deg(cant),
+                    tostring(canted))
+            end
+            if canted then
+                local levelled=Alignment.uncant(aim,cant)
+                -- Pivot at the drawn hand once its grip is held, so the hand
+                -- stays on the controller and only the gun turns around it.
+                local held=presentation.body_proxy and presentation.body_proxy.gun_hand_offsets and
+                    presentation.body_proxy.gun_hand_offsets[template.name]
+                if held and held.position then
+                    local attach_to_muzzle=Quaternion.multiply(Quaternion.inverse(old_attach_rotation),Unit.world_rotation(muzzle_unit,muzzle_node))
+                    grip=Alignment.pivot(grip,aim,levelled,attach_to_muzzle,held.position:unbox())
+                end
+                aim=levelled
+            end
         end
         local original_position=Unit.local_position(unit,attach)
         local desired_position=Matrix4x4.transform(Matrix4x4.inverse(Unit.world_pose(unit,parent)),grip)

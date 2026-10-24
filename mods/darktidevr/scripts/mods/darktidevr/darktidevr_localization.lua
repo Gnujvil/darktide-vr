@@ -2,7 +2,7 @@ return {
     melee_options = {en = "Physical melee"},
     vr_pose_block = {en = "Block by holding a guard pose"},
     vr_online_melee_trigger = {en = "Online swing attacks"},
-    vr_online_melee_trigger_description = {en = "In missions the server runs every attack, so a real swing presses the weapon's next attack, aimed and turned to follow the swing. On contact: the attack goes when your swing is about to reach an enemy, and a swing at nothing sends no attack. Every swing: each fast swing attacks. The Psykhanium always uses your blade's real path."},
+    vr_online_melee_trigger_description = {en = "In missions the server runs every attack, so a real swing presses the weapon's next attack, aimed at the first enemy on the swing's way, or turned to follow the swing when there is none. On contact: the attack goes as soon as your swing is seen with an enemy on its way, and a swing at nothing sends no attack. Every swing: each fast swing attacks. The Psykhanium uses the same attacks unless its online-rules option is off."},
     vr_online_melee_trigger_contact = {en = "On contact"},
     vr_online_melee_trigger_swing = {en = "Every swing"},
     vr_pose_block_description = {en = "Off by default. With physical melee enabled, settle your shield hand (or weapon hand without a shield) in front of you to block without holding the block button. Lower it to release. Native block angles and stamina still apply. Shove forward to push. Hold the right trigger before the shove, then swing the weapon hand for a push attack. Lower guard before starting a charged heavy."},

@@ -14,15 +14,19 @@ function Strokes.new(options)
         raw_travel=options.raw_travel or .12,raw_speed=options.raw_speed or .7,
         duration=options.duration or .045,coherence=options.coherence or .8,
         stop_speed=options.stop_speed or .35,settle=options.settle or .06,
-        max_active=options.max_active or .6,max_gap=options.max_gap or .1}
+        max_active=options.max_active or .6,max_gap=options.max_gap or .1,
+        min_travel=options.min_travel or .08,min_raw_travel=options.min_raw_travel or .06,min_duration=options.min_duration or .03,
+        fast_speed=options.fast_speed or 1.8}
     for _,n in pairs(config) do assert(finite(n) and n>0,"invalid stroke configuration") end
     assert(config.coherence<=1 and config.stop_speed<config.speed,"invalid stroke thresholds")
     local state={debt=0,serial=0,phase="settling"}
     local api={}
-    local function reset_motion()
+    local function reset_motion(why)
         state.point=nil; state.raw_point=nil; state.raw_support=nil; state.candidate=nil; state.active=nil; state.quiet=0; state.spent_direction=nil
-        state.ended=nil
-        state.phase="settling"
+        state.ended=nil; state.dropped=nil
+        state.phase="settling"; state.seed=nil; state.reset_still=false
+        -- Diagnostics: the latest reset, after which the next stroke must re-arm.
+        state.last_reset=why or "reset"; state.last_reset_at=state.time
     end
     -- A committed stroke can stop before its native action binds a frame
     -- later. Its record lets the owner sweep the path it already travelled,
@@ -44,20 +48,21 @@ function Strokes.new(options)
             collision_allowed=state.active~=nil,intent_hand=state.active and state.active.intent_hand,
             trajectory=state.active and state.active.trajectory,
             onset=state.active and state.active.onset or ended_stroke() and state.ended.onset or nil,
-            ended=ended_stroke()~=nil}
+            ended=ended_stroke()~=nil,last_reset=state.last_reset,last_reset_at=state.last_reset_at,
+            dropped=state.dropped}
     end
     function api.update(request)
         request=request or {}
         local time,frame=request.time,request.frame
         if not finite(time) or not finite(frame) or frame<0 or frame~=math.floor(frame) then
-            reset_motion(); state.output=snapshot("invalid_clock"); return state.output
+            reset_motion("invalid_clock"); state.output=snapshot("invalid_clock"); return state.output
         end
         local dt=state.time and time-state.time or 0
         if state.frame==frame and dt~=0 then
-            reset_motion(); state.output=snapshot("frame_time_conflict"); return state.output
+            reset_motion("frame_time_conflict"); state.output=snapshot("frame_time_conflict"); return state.output
         end
         if dt<0 or (state.frame and frame<state.frame) then
-            reset_motion(); state.time=time; state.frame=frame
+            reset_motion("clock_rewind"); state.time=time; state.frame=frame
             state.output=snapshot("clock_rewind"); return state.output
         end
         local changed=state.weapon~=request.weapon or state.mode~=request.mode
@@ -83,21 +88,29 @@ function Strokes.new(options)
             type(raw)=="table" and finite(raw[1]) and finite(raw[2]) and finite(raw[3]) and
             (support==nil or type(support)=="table" and finite(support[1]) and finite(support[2]) and finite(support[3]))
         if not valid then
-            reset_motion(); state.time=time; state.frame=frame
+            reset_motion("unavailable"); state.time=time; state.frame=frame
             state.output=snapshot("unavailable"); return state.output
         end
         local reference_changed=state.reference~=request.reference
         local grip_changed=(support~=nil)~=(state.raw_support~=nil)
         if state.frame==frame and not changed and not reference_changed and not grip_changed then
             if request.intent~=true or request.guarding==true then
-                reset_motion(); state.output=snapshot("no_attack_intent"); return state.output
+                reset_motion(request.guarding==true and "guarding" or "no_attack_intent")
+                state.output=snapshot("no_attack_intent"); return state.output
             end
             return snapshot("repeated")
         end
         state.time=time; state.frame=frame; state.interval=request.interval
         state.weapon=request.weapon; state.mode=request.mode; state.reference=request.reference
         if changed or reference_changed or grip_changed or dt>config.max_gap or not state.point then
-            reset_motion(); state.point=copy(point); state.raw_point=copy(raw)
+            -- Resuming after an earlier reset (no point yet) keeps that reset's
+            -- cause: an invalidate also renews the reference (review, 22 Oct).
+            local why=state.point and (grip_changed and "grip_source_changed" or reference_changed and "reference_changed" or
+                changed and "weapon_or_mode" or dt>config.max_gap and "frame_gap") or nil
+            local last,at=state.last_reset,state.last_reset_at
+            reset_motion(why); state.point=copy(point); state.raw_point=copy(raw)
+            -- Resuming after an earlier reset keeps that reset as the cause.
+            if not why then state.last_reset,state.last_reset_at=last,at end
             state.raw_support=support and copy(support)
             state.output=snapshot(grip_changed and "grip_source_changed" or "motion_reset"); return state.output
         end
@@ -116,7 +129,10 @@ function Strokes.new(options)
         state.point=copy(point); state.raw_point=copy(raw)
         state.raw_support=support and copy(support)
         if request.intent~=true or request.guarding==true then
-            reset_motion(); state.point=copy(point); state.raw_point=copy(raw)
+            reset_motion(request.guarding==true and "guarding" or "no_attack_intent"); state.point=copy(point); state.raw_point=copy(raw)
+            -- A still hand at the reset (a block held still, then let go)
+            -- interrupted no motion: its first fast motion is a new swing.
+            state.reset_still=hand_speed<config.stop_speed
             state.raw_support=support and copy(support)
             state.output=snapshot("no_attack_intent"); return state.output
         end
@@ -133,6 +149,7 @@ function Strokes.new(options)
                 trajectory={{point[1]-movement[1],point[2]-movement[2],point[3]-movement[3]},copy(point)},
                 start=time-dt,path=distance,allowed=ready}
         end
+        local restart_candidate=candidate
         -- A motion begun during recovery counts from the sample where the
         -- weapon became ready. Nothing travelled before it is swept or
         -- banked, and a motion that ends first never fires.
@@ -172,7 +189,27 @@ function Strokes.new(options)
             end
         elseif state.phase=="settling" then
             state.quiet=hand_speed<config.stop_speed and state.quiet+dt or 0
-            if state.quiet>=config.settle then state.phase="armed" end
+            -- After a reset the motion it interrupted is spent, not a new
+            -- swing; a swing turning 60 degrees from it re-arms without a
+            -- pause, as after a stroke (worn 22 October: a fight without
+            -- pauses otherwise stays unarmed).
+            if state.quiet>=config.settle then state.phase="armed"
+            elseif state.reset_still and direction and speed>=config.speed and raw_speed>=config.raw_speed then
+                state.candidate=candidate(); state.phase="candidate"
+            elseif not state.spent_direction then
+                -- The interrupted motion's heading, once two fast frames agree
+                -- on it: one glitched frame cannot set it (review, 22 October).
+                if direction and speed>=config.speed then
+                    if state.seed and dot(direction,state.seed)>.8 then state.spent_direction=direction;state.seed=nil
+                    else state.seed=direction end
+                end
+            elseif next_swing(state.spent_direction) then
+                state.candidate=candidate(); state.phase="candidate"
+            elseif direction and speed>=config.stop_speed and dot(direction,state.spent_direction)>=.5 then
+                -- Follow the interrupted swing as its arc turns; only a sharp
+                -- turn from it is a new swing (review: a reset mid-arc).
+                state.spent_direction=direction
+            end
         elseif state.phase=="armed" and speed>=config.speed and raw_speed>=config.raw_speed then
             -- Capture readiness at motion onset. A rejected motion cannot be
             -- banked and released as an attack when its cooldown expires.
@@ -193,16 +230,43 @@ function Strokes.new(options)
             local coherent=travel/math.max(candidate.path,1e-12)
             local raw_travel=length(delta(raw,candidate.raw_origin))
             local support_travel=support and length(delta(support,candidate.support_origin)) or 0
+            -- Speed-sensitive (user, 22 October): a faster swing qualifies
+            -- sooner, so its attack, which the game winds up from the press,
+            -- lags its contact less. Travel and time shrink with the swing's
+            -- mean speed above fast_speed, down to floors that reject jitter.
+            local fast=math.max(1,travel/math.max(time-candidate.start,1e-6)/config.fast_speed)
+            local need_travel=math.max(config.min_travel,config.travel/fast)
+            local need_raw=math.max(config.min_raw_travel,config.raw_travel/fast)
+            local need_duration=math.max(config.min_duration,config.duration/fast)
+            -- The owner's look-ahead found an enemy on this motion's path: it
+            -- is a swing at that enemy, qualified at the floors (contact mode).
+            if request.target_ahead==true then
+                need_travel,need_raw,need_duration=config.min_travel,config.min_raw_travel,config.min_duration
+            end
             -- Each hand must qualify independently. Alternating tiny movement
             -- between hands cannot accumulate into one coherent raw stroke.
-            local dominant_qualified=raw_travel>=config.raw_travel and raw_travel/math.max(candidate.raw_path,1e-12)>=config.coherence
-            local support_qualified=support_travel>=config.raw_travel and support_travel/math.max(candidate.support_path,1e-12)>=config.coherence
+            local dominant_qualified=raw_travel>=need_raw and raw_travel/math.max(candidate.raw_path,1e-12)>=config.coherence
+            local support_qualified=support_travel>=need_raw and support_travel/math.max(candidate.support_path,1e-12)>=config.coherence
             local raw_qualified=dominant_qualified or support_qualified
             if speed<config.stop_speed or coherent<config.coherence then
-                state.candidate=nil; state.phase="spent"; state.quiet=0
-                state.spent_direction=direction or state.spent_direction
-            elseif travel>=config.travel and raw_qualified and
-                    time-candidate.start>=config.duration and speed>=config.speed and
+                -- Why a real motion did not become a stroke (diagnostics).
+                local restart=speed>=config.stop_speed
+                if candidate.path>=.05 then
+                    state.dropped={time=time,speed=speed,coherence=coherent,travel=travel,path=candidate.path,
+                        duration=time-candidate.start,stop_speed=config.stop_speed,restarted=restart}
+                end
+                if restart then
+                    -- A curl as a swing sets off (the wrist turning while the
+                    -- arm starts; PC runs 22-23 October: every medium swing of
+                    -- one axe) restarts the measure here. Only a stop ends the
+                    -- motion; a jiggle still never travels one way far enough.
+                    state.candidate=restart_candidate()
+                else
+                    state.candidate=nil; state.phase="spent"; state.quiet=0
+                    state.spent_direction=direction or state.spent_direction
+                end
+            elseif travel>=need_travel and raw_qualified and
+                    time-candidate.start>=need_duration and speed>=config.speed and
                     (candidate.allowed or not candidate.reported) then
                 if candidate.allowed then
                     state.candidate=nil
@@ -243,7 +307,7 @@ function Strokes.new(options)
         return true
     end
     function api.invalidate()
-        reset_motion(); state.output=snapshot("invalidated")
+        reset_motion("invalidated"); state.output=snapshot("invalidated")
         return state.output
     end
     function api.status() return snapshot("status") end

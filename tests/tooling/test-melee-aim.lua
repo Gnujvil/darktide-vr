@@ -119,6 +119,14 @@ do
         assert(self._first_person_component == component)
     end)
     Managers.state.game_mode.game_mode_name = mode
+    -- The Psykhanium under the online rules judges the view as a server
+    -- would: natively, from the aimed first-person rotation, not the head.
+    presentation.online_rules = {enabled=function() return true end}
+    aim.with_melee_aim(action, function(self)
+        assert(self._first_person_extension == extension, 'Online-rules range view was replaced by the head')
+        assert(self._first_person_component == component)
+    end)
+    presentation.online_rules = nil
     action._unit_data_extension = {is_resimulating=true}
     aim.with_melee_aim(action, function(self)
         assert(self._first_person_extension == extension, 'Historical stock view was replaced')

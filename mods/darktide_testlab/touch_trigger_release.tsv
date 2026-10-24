@@ -1,0 +1,22 @@
+# grip=touch
+# The trigger held 0.25 s, 0.8 s and 1.6 s with the hand still, each let go without a
+# swing, 1.5 s apart; then two ordinary swings without the trigger, to show whether
+# attacking still works after them.
+#   run touch_trigger_release.tsv auto gesture-heavy
+# Stock route (the trigger is the attack button, 22 October): each let-go fires the
+# charge in place (a tap a light, a hold a heavy): expect presses_no_attack=0 and the two
+# swings still damaging (fewer is a lockout). Physical route: each let-go cancels,
+# expect cancelled=3 cancelled_attacked=0 (an attack after a cancel is a leak).
+# t left_xyz left_xyzw right_xyz right_xyzw primary block left_grip right_grip special
+0.000 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 -0.6000 0.45 -0.3 0 0 0 1 0 0 0 0 0
+0.500 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 -0.6000 0.45 -0.3 0 0 0 1 1 0 0 0 0
+0.750 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 -0.6000 0.45 -0.3 0 0 0 1 0 0 0 0 0
+2.250 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 -0.6000 0.45 -0.3 0 0 0 1 1 0 0 0 0
+3.050 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 -0.6000 0.45 -0.3 0 0 0 1 0 0 0 0 0
+4.550 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 -0.6000 0.45 -0.3 0 0 0 1 1 0 0 0 0
+6.150 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 -0.6000 0.45 -0.3 0 0 0 1 0 0 0 0 0
+7.650 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 -0.6000 0.45 -0.3 0 0 0 1 0 0 0 0 0
+8.000 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 0.6000 0.45 -0.3 0 0 0 1 0 0 0 0 0
+9.500 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 0.6000 0.45 -0.3 0 0 0 1 0 0 0 0 0
+9.850 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 -0.6000 0.45 -0.3 0 0 0 1 0 0 0 0 0
+11.450 -0.25 0.3 -0.35 0.70710678 0 0 0.70710678 -0.6000 0.45 -0.3 0 0 0 1 0 0 0 0 0

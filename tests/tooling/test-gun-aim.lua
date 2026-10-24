@@ -27,7 +27,7 @@ local function add(a,b) return {a[1]+b[1],a[2]+b[2],a[3]+b[3]} end
 local function scale(a,s) return {a[1]*s,a[2]*s,a[3]*s} end
 Vector3={distance=function(a,b)
     return math.sqrt((a[1]-b[1])^2+(a[2]-b[2])^2+(a[3]-b[3])^2)
-end}
+end,x=function(v) return v[1] end,y=function(v) return v[2] end,z=function(v) return v[3] end}
 local function near_position(a,b) assert(Vector3.distance(a,b)<1e-8,'controller grip placement mismatch') end
 Matrix4x4={inverse=function(m) return {rotation=m.rotation,position=m.position,scale=m.scale,inverse=true} end,
     transform=function(m,p)
@@ -41,6 +41,7 @@ local original_position={.3,-.1,.2}
 local local_position=original_position
 local parent_position,parent_scale={4,-6,1},1.3
 local grip={3,2,1}
+local muzzle_offset={0,.5,.1}
 local template={actions={shoot={kind='shoot_hit_scan'}}}
 local settings,aim,active,dominant=nil,q(.1,.9,-.8),true,'right'
 local weapon={_inventory_component={},_weapons={},
@@ -53,7 +54,15 @@ Unit={alive=function(unit) return not unit.dead end,
     node=function() return 2 end,scene_graph_parent=function() return 1 end,
     local_rotation=function(unit,node) assert(unit==source and node==2); return local_rotation end,
     local_position=function(unit,node) assert(unit==source and node==2); return local_position end,
-    world_pose=function(unit,node) assert(unit==source and node==1); return {rotation=parent,position=parent_position,scale=parent_scale} end,
+    world_pose=function(unit,node)
+        -- An upright gun: its grip (the attach node) straight below the bore.
+        if unit==muzzle then
+            local r=mul(mul(parent,local_rotation),relative)
+            local attach=add(parent_position,rotate(parent,scale(local_position,parent_scale)))
+            return {rotation=r,position=add(attach,rotate(r,muzzle_offset)),scale=1}
+        end
+        assert(unit==source and node==1); return {rotation=parent,position=parent_position,scale=parent_scale}
+    end,
     world_position=function(unit,node) assert(unit==source and node==2); return add(parent_position,rotate(parent,scale(local_position,parent_scale))) end,
     world_rotation=function(unit,node)
         if unit==muzzle then return mul(mul(parent,local_rotation),relative) end
@@ -78,6 +87,18 @@ for i=1,120 do
     near_position(Unit.world_position(source,2),grip)
 end
 assert(instance.writes==120 and instance.failures==0)
+-- A canted model (autogun_p3: grip 45 deg round the bore) is drawn upright:
+-- its muzzle takes the aim turned by the cant about the barrel.
+muzzle_offset={-.0557,.5,.0557}
+instance.update(world,source)
+near(Unit.world_rotation(muzzle,1),Alignment.uncant(aim,math.rad(45)))
+-- A grip above the barrel is the weapon's own layout, not a roll (the ogryn
+-- grenadier gauntlet: the barrel under the fist reads 180 deg in the PC
+-- sweep, 22 October): it is drawn as aimed, never turned upside down.
+muzzle_offset={0,.5,-.1}
+instance.update(world,source)
+near(Unit.world_rotation(muzzle,1),aim)
+muzzle_offset={0,.5,.1}
 template={keywords={'force_staff'},actions={shoot={kind='shoot_hit_scan'}}}
 instance.update(world,source); near(local_rotation,original)
 near_position(local_position,original_position)
@@ -110,7 +131,11 @@ aim=q(.3,.2,.1)
 weapon._fx_extension.vfx_spawner_unit_and_node=function() error('retired muzzle') end
 instance.update(world,source); instance.update(world,source)
 assert(messages==1 and instance.failures==2); near(local_rotation,engine_authored)
-assert(not Alignment.is_gun({actions={fire={kind='flamer_gas'}}}))
+-- The flamer is drawn by the controller like every gun (PC audit, 22
+-- October); a flame staff shares its action kind and stays a staff.
+assert(Alignment.is_gun({actions={fire={kind='flamer_gas'}}}))
+assert(not Alignment.is_gun({keywords={'force_staff'},actions={fire={kind='flamer_gas'}}}))
+assert(not Alignment.is_gun({actions={swing={kind='sweep'}}}))
 -- Actual simulation reader must ignore all animated hand/muzzle orientations.
 local file=assert(io.open(assert(arg[2]),'rb')); local main=file:read('*a'); file:close()
 local first=assert(main:find('function presentation.weapon_aim_target(',1,true))
@@ -204,15 +229,39 @@ do
     local live_p,live_q=vec({.1,.2,.3}),{0,0,0,1}
     local p1,q1=proxy.gun_hand_offset('rifle',false,live_p,live_q)
     assert(p1==live_p and q1==live_q and not proxy.gun_hand_offsets.rifle,'unsteady frame captured')
-    proxy.gun_hand_offset('rifle',true,vec({.1,.2,.3}),{0,0,0,1})
-    proxy.gun_hand_offset('rifle',true,vec({.3,.2,.1}),{0,0,0,1})
-    local p3=proxy.gun_hand_offset('rifle',true,vec({.2,.2,.2}),{0,0,0,-1})
+    proxy.gun_hand_offset('rifle',true,vec({.2,.2,.2}),{0,0,0,1})
+    proxy.gun_hand_offset('rifle',true,vec({.201,.2,.199}),{0,0,0,1})
+    local p3=proxy.gun_hand_offset('rifle',true,vec({.199,.2,.201}),{0,0,0,-1})
     near_position(p3,{.2,.2,.2})
     local held_p,held_q=proxy.gun_hand_offset('rifle',false,vec({9,9,9}),{0,0,1,0})
     near_position(held_p,{.2,.2,.2}); near(held_q,{0,0,0,1})
     local other=proxy.gun_hand_offset('pistol',false,live_p,live_q)
     assert(other==live_p,'another weapon used the rifle grip')
     assert(proxy.gun_hand_offset(nil,true,live_p,live_q)==live_p,'no key: live offset')
+    -- A grip still moving (the tail of a draw, a fidget) is never captured,
+    -- nor are samples split by an unsteady frame; the still pose that
+    -- follows is (autogun, worn 22 October).
+    local s=math.sin(math.rad(10)/2)
+    for i=1,6 do
+        proxy.gun_hand_offset('autogun',true,vec({.05*i,.2,.2}),{0,s*(i%2),0,math.sqrt(1-(s*(i%2))^2)})
+    end
+    assert(not proxy.gun_hand_offsets.autogun.position,'a moving grip was captured')
+    proxy.gun_hand_offset('autogun',true,vec({.4,.2,.2}),{0,0,0,1})
+    proxy.gun_hand_offset('autogun',true,vec({.4,.2,.2}),{0,0,0,1})
+    proxy.gun_hand_offset('autogun',false,vec({.4,.2,.2}),{0,0,0,1})
+    proxy.gun_hand_offset('autogun',true,vec({.4,.2,.2}),{0,0,0,1})
+    assert(not proxy.gun_hand_offsets.autogun.position,'samples split by an unsteady frame were captured')
+    proxy.gun_hand_offset('autogun',true,vec({.4,.2,.2}),{0,0,0,1})
+    local still=proxy.gun_hand_offset('autogun',true,vec({.4,.2,.2}),{0,0,0,1})
+    near_position(still,{.4,.2,.2})
+    assert(proxy.gun_hand_offsets.autogun.position,'a still grip was not captured')
+    -- A slow drift (1 deg per frame, under the per-frame limit) is still
+    -- motion: compared with the run's first frame it never settles.
+    local half=math.rad(.5)
+    for i=1,12 do
+        proxy.gun_hand_offset('drift',true,vec({.4,.2,.2}),{0,math.sin(half*i),0,math.cos(half*i)})
+    end
+    assert(not proxy.gun_hand_offsets.drift.position,'a slowly drifting grip was captured')
 end
 -- The finger curl (animation audit item H) is keyed the same way, and the key
 -- is only valid on the frame the gun path set it: melee, which sets none,
@@ -229,5 +278,27 @@ do
     assert(proxy.finger_capture_key(nil)==nil)
     now=11
     assert(proxy.finger_capture_key('right')==nil,'a stale key is not used')
+end
+-- Upright guns (user, 22 October: the autogun and its hands were drawn
+-- canted CCW). The autogun_p3 grip sits 45 deg round the bore in its muzzle
+-- frame; uncanted, the grip hangs straight below the barrel, the barrel keeps
+-- the aim's direction, and pivoting at the hand keeps the hand in place.
+-- An upright gun (shotgun, shield pistol: grip straight below) is untouched.
+do
+    local aim=q(.3,.8,-.2)
+    local a=.0557
+    local cant=Alignment.cant(a,-a)
+    assert(math.abs(math.deg(cant)-45)<1e-9,'autogun cant misread: '..math.deg(cant))
+    local upright=Alignment.uncant(aim,cant)
+    local g=rotate(Quaternion.inverse(aim),rotate(upright,{a,.3,-a}))
+    assert(math.abs(g[1])<1e-9 and g[3]<0,'uncanted grip is not straight below the barrel')
+    local f0,f1=rotate(aim,{0,1,0}),rotate(upright,{0,1,0})
+    for i=1,3 do assert(math.abs(f0[i]-f1[i])<1e-9,'uncanting turned the barrel') end
+    assert(math.abs(Alignment.cant(0,-.1093))<Alignment.CANT_TOLERANCE,'an upright shotgun read as canted')
+    local a2m,grip,offset=q(.1,.4,-.3),vec({.4,-.2,1.3}),vec({.057,-.141,-.06})
+    local moved=Alignment.pivot(grip,aim,upright,a2m,offset)
+    local before=grip+Quaternion.rotate(mul(aim,Quaternion.inverse(a2m)),offset)
+    local after=moved+Quaternion.rotate(mul(upright,Quaternion.inverse(a2m)),offset)
+    assert(Vector3.distance(before,after)<1e-9,'uncanting moved the hand off the controller')
 end
 print('PASS controller gun pitch/hand: 120 poses, pitch sign/live setting/shared pitch for every item and hand, draw/reload ownership, actual simulation reader and rigid-hand relative grip preservation')

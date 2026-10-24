@@ -743,7 +743,13 @@ function controller_aim.install(mod, presentation, state)
             -- Private stock proving retains its simulation attack pose. Its
             -- local view predicate still needs the head actually being rendered.
             -- This grants no hand-authored action or remote mission authority.
-            if is_private_range() then return controller_aim.with_physical_view(action, func, ...) end
+            -- Under the online rules the predicate stays native, as a server
+            -- judges it: from the first-person rotation the swing's aim sets,
+            -- not the head (PC run refO1, 23 October: the rendered head 50-77
+            -- degrees off the aimed view dropped every contact on a close
+            -- poxwalker the attack was laid through).
+            local online = presentation.online_rules and presentation.online_rules.enabled()
+            if is_private_range() and not online then return controller_aim.with_physical_view(action, func, ...) end
             return func(action, ...)
         end
         local _, rotation = controller_aim.target("dominant")
@@ -873,7 +879,7 @@ function controller_aim.install(mod, presentation, state)
     mod:hook(physical_sweep,"_process_hit",function(func,self,t,unit,actor,hits,settings,position,direction,zone,...)
         local physical=presentation.physical_melee
         if physical then
-            if physical.before_hit(self,unit)==false then return false,false end
+            if physical.before_hit(self,unit,zone)==false then return false,false end
             direction=physical.hit_direction(self) or direction
         end
         local aborted,armor=func(self,t,unit,actor,hits,settings,position,direction,zone,...)

@@ -5,9 +5,26 @@ local Runtime={}
 -- Seconds ahead of a chain window that a stock attack press is still
 -- buffered by the native parser rather than dropped.
 Runtime.STOCK_BUFFER=.25
--- A stock charge let go without a swing is block-cancelled: the attack stays
--- held FEINT_HOLD frames while block is pressed for FEINT_BLOCK frames.
-Runtime.FEINT_HOLD,Runtime.FEINT_BLOCK=3,6
+-- Stock contact mode: a stroke reaching the same enemy as the previous press,
+-- before the server has started that press (the combo has not moved on), is
+-- the same swing seen twice, not a second attack (worn 22 October).
+Runtime.DUPLICATE_WINDOW=.5
+-- A contact found further along the swing than its attack's press-to-damage
+-- time waits: pressed at once, the damage would land before the weapon
+-- arrives (user, 23 October). PRESS_SLACK: how early a press may still go,
+-- one probe slice; ARM_WAIT: how long a swing may wait to arrive.
+Runtime.PRESS_SLACK,Runtime.ARM_WAIT=.05,.8
+-- Walking with an arm-pump locomotion (VR StrideS; user, 23 October: a jog
+-- read as slow swings). While the character moves at STRIDE_WALK m/s or more,
+-- a stroke whose weapon hand moves slower than STRIDE_FAST m/s while the other
+-- hand swings the opposite way (cosine at most STRIDE_COS) at STRIDE_MATCH or
+-- more of its speed is a stride, not an attack. A fast swing always attacks
+-- (user: sometimes you swing hard while walking). Measured over STRIDE_WINDOW
+-- from samples already taken, so no swing waits for it.
+Runtime.STRIDE_WALK,Runtime.STRIDE_FAST,Runtime.STRIDE_COS,Runtime.STRIDE_MATCH,Runtime.STRIDE_WINDOW=.5,2.5,-.5,.5,.08
+-- Off (worn-8, 24 October: 63 swings held as strides; user: "too sensitive").
+-- Every stroke still logs stride_match, whether the filter would have held it.
+Runtime.STRIDE_FILTER=false
 -- A native lock-in (a revved chainsword sawing) keeps the weapon in its target
 -- for the native sticky time, through a swing's follow-through. Only a pull
 -- of the real hand this far from the locked weapon yanks it out early.
@@ -43,7 +60,11 @@ local function tip(pose,offset)
         p[2]+y+q[4]*ty+q[3]*tx-q[1]*tz,p[3]+z+q[4]*tz+q[1]*ty-q[2]*tx}
 end
 function Runtime.new(deps,options)
-    assert(not Runtime.owner(options.unit),"another melee pose producer owns this player")
+    -- A second hand's runtime (dual weapons) leases its own key: it presses
+    -- stock attacks only and never owns an action, so it may share the player.
+    local lease=options.lease or options.unit
+    assert(options.lease==nil or options.authority=="stock","only a stock runtime may take a second lease")
+    assert(not Runtime.owner(lease),"another melee pose producer owns this player")
     assert(options.source=="synthetic" or options.source=="tracking","explicit pose source required")
     assert(type(options.to_world)=="function" and type(options.cancel_native)=="function","world mapping and native cancellation required")
     local owner,strokes=assert(options.owner),assert(options.strokes)
@@ -52,11 +73,14 @@ function Runtime.new(deps,options)
     -- timing, sweep and damage decide the rest, so nothing here may own an
     -- action, rewrite a chain or cancel one the server would keep running.
     local stock=options.authority=="stock"
-    -- Stock contact mode: a stroke arms, and presses only once its weapon's
-    -- look-ahead (deps.Contact) reaches an enemy; a stroke that reaches none
-    -- is a whiff and sends nothing.
-    local contact_mode=stock and type(options.contact)=="function"
-    assert(not contact_mode or deps.Contact,"contact mode requires the contact look-ahead")
+    -- Stock contact mode: a stroke arms, and presses as soon as an enemy lies
+    -- on its weapon's way (the look-ahead, deps.Contact); a stroke that
+    -- reaches none is a whiff and sends nothing. options.trigger "swing"
+    -- presses every stroke instead. Either way a press is aimed at the first
+    -- enemy on its way, when there is one.
+    local seeking=stock and type(options.contact)=="function"
+    local contact_mode=seeking and options.trigger~="swing"
+    assert(not seeking or deps.Contact,"contact mode requires the contact look-ahead")
     assert(stock or options.authority==nil or options.authority=="physical","unknown melee authority")
     local bridge
     local defense=assert(deps.Defense,"shared defense recognizer required").new()
@@ -86,9 +110,8 @@ function Runtime.new(deps,options)
         local action=state.action
         local authoring=state.authoring or action~=nil or state.pending~=nil or state.heavy~=nil
         state.armed=nil
-        -- The trigger never attacks on its own. Locally the charge is stopped
-        -- outright; a server's charge can only be cancelled into a block.
-        if stock and state.heavy then state.feint={} end
+        -- Locally the charge is stopped outright. A server's charge ends when
+        -- the attack input stops being held, as the stock button's does.
         state.authoring=false
         state.action=nil; state.pending=nil; state.pulse=nil; state.release=nil; state.push_frame=nil
         state.tether=nil
@@ -152,7 +175,7 @@ function Runtime.new(deps,options)
         if state.closed then return end
         strokes.invalidate(); state.current=nil; state.frame=nil; state.pose_epoch={}
         state.previous=nil;state.previous_sample=nil;state.previous_body=nil;state.previous_time=nil
-        state.history=nil;state.backfill=nil
+        state.history=nil;state.backfill=nil;state.hand_trail=nil;state.stride_hold=nil
         state.world_direction=nil;state.direction=nil
         defense.reset(); state.defense=nil; state.block_output=nil; state.block_held=false
         owner.reset()
@@ -164,14 +187,55 @@ function Runtime.new(deps,options)
     local function aim_commit(onset,virtual,offset,data)
         if not options.on_commit then return end
         local points={}
+        -- Each sample's hand pose through the current world mapping: the
+        -- stroke's path relative to the character, without its locomotion
+        -- since the onset (PC run moveA, 24 October: a swing back against a
+        -- 4 m/s run left a world path too short to aim; a strafe skewed it).
         for _,sample in ipairs(state.history or {}) do
-            if onset and sample.time>=onset then points[#points+1]=tip(sample.world,sample.offset) end
+            if onset and sample.time>=onset then
+                points[#points+1]=tip(sample.pose and capture_world(sample.pose) or sample.world,sample.offset)
+            end
         end
         local now=capture_world(virtual)
         if now then points[#points+1]=tip(now,offset) end
         data.points=points
         local ok,err=pcall(options.on_commit,data)
         if not ok then emit("gesture_aim_error",{reason=tostring(err)}) end
+    end
+    -- Both hands' raw positions over the last moments, for the stride check.
+    local function track_hands(request)
+        local d=request.dominant and request.dominant.position
+        local s=request.support and request.support.position
+        if type(d)~="table" or type(request.time)~="number" then return end
+        local trail=state.hand_trail or {}
+        state.hand_trail=trail
+        trail[#trail+1]={time=request.time,d={d[1],d[2],d[3]},s=type(s)=="table" and {s[1],s[2],s[3]} or nil}
+        while #trail>2 and request.time-trail[1].time>.3 do table.remove(trail,1) end
+    end
+    -- A stroke's motion: walking speed, weapon-hand speed, and how the other
+    -- hand moves against it (cos -1: exactly opposite; ratio: its speed share).
+    local function stride(request)
+        local trail=state.hand_trail
+        local now=trail and trail[#trail]
+        local result={walk=tonumber(request.walk_speed) or 0}
+        if not now then return result end
+        local before
+        for index=#trail-1,1,-1 do
+            if now.time-trail[index].time>=Runtime.STRIDE_WINDOW then before=trail[index];break end
+        end
+        if not before then return result end
+        local span=now.time-before.time
+        local vd={(now.d[1]-before.d[1])/span,(now.d[2]-before.d[2])/span,(now.d[3]-before.d[3])/span}
+        result.hand=math.sqrt(vd[1]^2+vd[2]^2+vd[3]^2)
+        if not now.s or not before.s or result.hand<1e-6 then return result end
+        local vs={(now.s[1]-before.s[1])/span,(now.s[2]-before.s[2])/span,(now.s[3]-before.s[3])/span}
+        local other=math.sqrt(vs[1]^2+vs[2]^2+vs[3]^2)
+        result.ratio=other/result.hand
+        result.cos=other>1e-6 and (vd[1]*vs[1]+vd[2]*vs[2]+vd[3]*vs[3])/(result.hand*other) or 0
+        result.stride_match=result.walk>=Runtime.STRIDE_WALK and result.hand<Runtime.STRIDE_FAST and
+            result.ratio>=Runtime.STRIDE_MATCH and result.cos<=Runtime.STRIDE_COS
+        result.stride=Runtime.STRIDE_FILTER and result.stride_match
+        return result
     end
     function api.sample(request)
         if state.closed then return nil,"closed" end
@@ -243,18 +307,41 @@ function Runtime.new(deps,options)
             emit("push",{time=request.time,source=options.source,authority="native_input"})
         end
         if timing and not state.offset then
-            local volume,detail=deps.Volume.resolve(options.weapon.weapon_template,{},options.defaults,timing.uses_matrix_data)
+            local template=options.weapon.weapon_template
+            local volume,detail=deps.Volume.resolve(template,{},options.defaults,timing.uses_matrix_data)
+            -- A template without its own box keeps one per attack (the
+            -- crowbar; PC run fastL, 22 October: invalid_box, no swings): the
+            -- next light attack's box gives the weapon's tip.
+            if not volume and template.actions and template.actions[timing.light_action] then
+                volume,detail=deps.Volume.resolve(template,template.actions[timing.light_action],options.defaults,timing.uses_matrix_data)
+            end
             if not volume then reason=detail; timing=nil else state.offset=volume.offset end
         end
         local offset=state.offset or {0,0,0}
         local heavy_button=request.heavy_intent==true and not guarding
-        if state.heavy and (not heavy_button or not timing or
+        if stock and state.heavy and (request.heavy_intent~=true or not timing) then
+            -- Stock (user, 22 October): the trigger is the attack button. Let
+            -- go and the server's own input rules fire the charge: a heavy
+            -- once charged, a light if tapped. A swing only releases sooner.
+            -- Block does not let go: held with block the server cancels the
+            -- charge itself (stock attack_cancel); a release there would fire.
+            state.heavy=nil; state.release=request.frame
+            if state.armed and state.armed.charged then state.armed=nil end
+            emit("charge_release",{time=request.time,reason=timing and "let_go" or "context"})
+        elseif not stock and state.heavy and (not heavy_button or not timing or
                 timing.heavy_action~=state.heavy.action or
                 timing.heavy_auto_complete_after and request.time-state.heavy.start>=timing.heavy_auto_complete_after-.1) then
             finish_action(request.time); strokes.invalidate()
             emit("charge_cancel",{time=request.time,reason="released_context_or_deadline"})
         end
-        if heavy_button and not state.heavy_button and timing and timing.ready and timing.heavy_interval and
+        if stock and heavy_button and not state.heavy and timing and timing.heavy_interval and
+                request.frame>(state.release or -2)+1 and request.frame>(state.pulse or -2)+1 then
+            -- A held stock button keeps charging: pressed mid-attack it waits
+            -- in the server's buffer, and after a release (a swing, or the
+            -- server's auto-complete) it charges again, two frames let go.
+            state.heavy={start=request.time,frame=request.frame,action=timing.heavy_action}
+            emit("charge_start",{time=request.time,action=timing.heavy_action,source=options.source})
+        elseif not stock and heavy_button and not state.heavy_button and timing and timing.ready and timing.heavy_interval and
                 strokes.status().remaining<=0 and not virtual.reset then
             state.heavy={start=request.time,frame=request.frame,action=timing.heavy_action}
             emit("charge_start",{time=request.time,action=timing.heavy_action,source=options.source})
@@ -273,17 +360,116 @@ function Runtime.new(deps,options)
         -- window, and never on top of an input it has not consumed yet.
         local buffered=stock and timing and (timing.ready or timing.ready_in and timing.ready_in<=Runtime.STOCK_BUFFER) and
             not deps.Timing.input_queued(options.extension)
-        local status=strokes.update({point=tip(virtual,offset),raw_point=tip(request.dominant,offset),
+        -- The weapon's way ahead, its attack's press-to-damage time or
+        -- Contact.WAY if longer, probed for the first enemy it meets
+        -- (deps.Contact); nil when nothing is reached.
+        local function look_ahead(action,heavy)
+            local now=capture_world(virtual)
+            local previous
+            -- The motion carried on from 20 ms back: a swing accelerates, and an
+            -- older baseline predicts its contact late (user, 22 October:
+            -- fast swings' hits lagged the weapon).
+            for index=#(state.history or {}),1,-1 do
+                local sample=state.history[index]
+                if request.time-sample.time>=.02 then previous=sample;break end
+            end
+            if not now or not previous or not timing or not action then
+                state.seek=not previous and "no_history" or not action and "no_action" or "no_pose"; return nil
+            end
+            local settings=options.weapon.weapon_template.actions[action]
+            local ok,scale=pcall(options.extension._action_handler._calculate_time_scale,options.extension._action_handler,settings)
+            -- Plus the windup's own wait before the attack may chain.
+            local windup=timing.windup_action and options.weapon.weapon_template.actions[timing.windup_action]
+            local chain=windup and windup.allowed_chain_actions and windup.allowed_chain_actions[heavy and "heavy_attack" or "light_attack"]
+            local wait=(timing.ready_in or 0)+(not heavy and chain and tonumber(chain.chain_time) or 0)/(ok and scale or 1)
+            local delay=deps.Contact.horizon(settings,ok and scale or 1,wait)
+            local horizon=deps.Contact.way(delay)
+            -- The hand's motion carries the weapon as it is held now; the
+            -- weapon's own lag spin is not continued (see Contact.path).
+            local hand=request.dominant and previous.raw_world and capture_world(request.dominant)
+            local poses=hand and deps.Contact.path(previous.raw_world,hand,request.time-previous.time,horizon,now) or
+                deps.Contact.path(previous.world,now,request.time-previous.time,horizon)
+            local queried,result=pcall(options.contact,{poses=poses or {now},action=action,time=request.time,horizon=horizon})
+            if not queried then emit("gesture_contact_error",{reason=tostring(result)});return nil end
+            -- Diagnostics: why the latest probe found nothing (see candidate_dropped).
+            state.seek=result and "hit" or (poses and "clear" or "no_path")..":"..#(poses or {}).."@"..string.format("%.2f",horizon)
+            -- When the weapon gets there (poses are evenly spaced over the way,
+            -- the first being now), against when a press now would land. Timed
+            -- by the blade as drawn when it reaches the same enemy on this way:
+            -- the attack's box can run 0.3-0.5 s of swing past it (pass 7, 23
+            -- October: a crowbar's damage before its blade arrived). An enemy
+            -- only the box reaches keeps the box's time.
+            if type(result)=="table" then
+                local count=poses and #poses or 1
+                local step=tonumber(result.step) or 1
+                if count>1 and result.unit~=nil then
+                    local drawn,blade=pcall(options.contact,{poses=poses,action=action,time=request.time,horizon=horizon,visual=true})
+                    if drawn and type(blade)=="table" and blade.unit==result.unit and tonumber(blade.step) then
+                        step=math.max(step,tonumber(blade.step)); result.blade=true
+                    else result.blade=false end
+                end
+                result.ahead=count>1 and math.max(0,step-1)*horizon/(count-1) or 0
+                result.delay=delay
+            end
+            return result
+        end
+        -- A swing whose path already reaches an enemy within the wind-up is
+        -- pressed at the start of its motion, not after its full qualifying
+        -- travel (user, 22 October: damage as the weapon arrives).
+        track_hands(request)
+        local target_ahead=seeking and not state.armed and not following and strokes.status().phase=="candidate" and
+            look_ahead(charged and timing and timing.heavy_action or timing and timing.light_action,charged)~=nil or false
+        local status=strokes.update({target_ahead=target_ahead,point=tip(virtual,offset),raw_point=tip(request.dominant,offset),
             raw_support_point=virtual.support_engaged and request.support and tip(request.support,offset) or nil,
             time=request.time,frame=request.frame,interval=interval,weapon=options.weapon,mode="physical",
             reference=state.pose_epoch,tracking_valid=true,
-            intent=request.intent and (following or charged or not heavy_button or
+            -- A held stock trigger never resets the swing between charges; the
+            -- swing simply waits until the charge can be released.
+            intent=request.intent and (following or charged or not heavy_button or stock or
                 not charged and strokes.status().collision_allowed),
             guarding=guarding and not following and not (state.follow_active and strokes.status().collision_allowed),
             native_ready=following and state.follow.plan.ready or not following and timing and
                 (charged and timing.heavy_ready or not heavy_button and (stock and buffered or not stock and (timing.ready or interrupt)))})
         if status.suppressed_candidate then emit("suppressed_candidate",status.suppressed_candidate) end
-        if status.committed then
+        if status.dropped and status.dropped~=state.dropped then
+            state.dropped=status.dropped
+            local d=status.dropped
+            emit("candidate_dropped",{speed=string.format("%.2f",d.speed),coherence=string.format("%.2f",d.coherence),
+                travel=string.format("%.3f",d.travel),path=string.format("%.3f",d.path),
+                duration=string.format("%.3f",d.duration),stop_speed=d.stop_speed,seek=state.seek or "none",restarted=d.restarted==true})
+        end
+        -- Every stroke's motion is logged; a stride presses nothing (the stroke
+        -- still runs out in the detector, so the next real swing is not held up).
+        -- A stroke commits as its hand speeds up, before a hard swing is fast:
+        -- a held stride that crosses STRIDE_FAST is committed then (PC fixture,
+        -- 23 October: hard pumps measured 1.5-2.4 m/s at their commit).
+        local motion,late=nil,false
+        if status.committed and stock and not following then
+            motion=stride(request)
+            state.stride_hold=motion.stride and status.stroke_id or nil
+        elseif state.stride_hold then
+            local current=strokes.status()
+            if not stock or following or current.stroke_id~=state.stride_hold or not current.collision_allowed then
+                state.stride_hold=nil
+            else
+                local now=stride(request)
+                if now.hand and now.hand>=Runtime.STRIDE_FAST then motion=now;late=true;state.stride_hold=nil end
+            end
+        end
+        local function motion_fields(fields)
+            if motion then
+                fields.walk=string.format("%.2f",motion.walk); fields.hand=motion.hand and string.format("%.2f",motion.hand) or "nil"
+                fields.cos=motion.cos and string.format("%.2f",motion.cos) or "nil"
+                fields.ratio=motion.ratio and string.format("%.2f",motion.ratio) or "nil"
+                fields.stride_match=motion.stride_match==true
+            end
+            return fields
+        end
+        if motion and motion.stride then
+            emit("stroke_filtered",motion_fields({id=status.stroke_id,time=request.time,reason="stride"}))
+        end
+        if late then emit("stroke_released",motion_fields({id=status.stroke_id,time=request.time,reason="fast"})) end
+        if status.committed and not (motion and motion.stride) or late then
             local selected,selection_error
             -- The running attack chains straight into this one; see select_chain.
             if interrupt then state.interrupting=true; emit("interrupt",{time=request.time,action=state.committed_action}) end
@@ -303,12 +489,12 @@ function Runtime.new(deps,options)
             else
             local arming=contact_mode and not following
             state.pending=status.stroke_id; state.commit_time=request.time; state.pulse=not arming and request.frame or nil; state.release=nil
-            state.feint=nil
             state.native_entry=not following and (charged and timing.heavy_action or timing.light_action) or nil
             state.native_input=not following and (charged and "heavy_attack" or "light_attack") or nil
             state.committed_action=following and state.follow.plan.action or selected.action
             if selected then
-                assert(strokes.reserve_interval(selected.interval),"selected native recovery reservation failed")
+                -- A released stride's recovery has already started to run down.
+                assert(strokes.reserve_interval(selected.interval) or late,"selected native recovery reservation failed")
                 status=strokes.status()
                 status.committed=true
                 if not stock then
@@ -318,48 +504,108 @@ function Runtime.new(deps,options)
             end
             if charged and not arming then state.heavy=nil; state.pulse=nil; state.release=request.frame end
             if following then state.pulse=nil end
-            emit("stroke",{id=status.stroke_id,interval=interval,action=state.committed_action,intent_hand=status.intent_hand,
-                time=request.time,source=options.source,authority=stock and "stock" or "physical"})
+            emit("stroke",motion_fields({id=status.stroke_id,interval=interval,action=state.committed_action,intent_hand=status.intent_hand,
+                time=request.time,source=options.source,authority=stock and "stock" or "physical"}))
             if arming then
-                state.armed={action=state.committed_action,charged=charged,time=request.time,onset=status.onset,active=request.time}
+                local path=status.trajectory
+                local direction=type(path)=="table" and #path>=2 and
+                    {path[#path][1]-path[1][1],path[#path][2]-path[1][2],path[#path][3]-path[1][3]} or nil
+                state.armed={action=state.committed_action,charged=charged,time=request.time,onset=status.onset,active=request.time,
+                    direction=direction,start_t=component.start_t}
                 emit("gesture_armed",{action=state.committed_action,time=request.time})
             elseif stock then
+                local hit=seeking and not following and look_ahead(state.committed_action,charged) or nil
+                if hit then
+                    state.reach={unit=hit.unit,action=state.committed_action,time=request.time,deadline=request.time+.8,heavy=charged}
+                    emit("gesture_contact",{action=state.committed_action,zone=hit.zone,step=hit.step,time=request.time,lead=0})
+                end
                 aim_commit(status.onset,virtual,offset,{action=state.committed_action,heavy=charged,
-                    follow_up=following,time=request.time})
+                    follow_up=following,time=request.time,target=hit and hit.position,target_unit=hit and hit.unit,
+                    delay=hit and hit.delay})
             end
             end
+        end
+        -- A press buffered behind a running attack that then ended without
+        -- starting it was dropped (PC run valH2, 23 October: an activated
+        -- thunderhammer's hit ended its swing, and the retry swing was refused
+        -- as that press's duplicate). It guards nothing.
+        local last_press=state.last_press
+        if stock and last_press and last_press.behind then
+            local name=component.current_action_name
+            if not name or name=="none" then state.last_press=nil
+            elseif component.start_t~=last_press.start_t then last_press.behind=nil end
         end
         local armed=state.armed
         if armed then
             local active=strokes.status().collision_allowed
             if active then armed.active=request.time end
-            local hit
-            local now=capture_world(virtual)
-            local previous
-            for index=#(state.history or {}),1,-1 do
-                local sample=state.history[index]
-                if request.time-sample.time>=.04 then previous=sample;break end
-            end
-            if now and previous and timing then
-                local settings=options.weapon.weapon_template.actions[armed.action]
-                local ok,scale=pcall(options.extension._action_handler._calculate_time_scale,options.extension._action_handler,settings)
-                -- Plus the windup's own wait before the attack may chain.
-                local windup=timing.windup_action and options.weapon.weapon_template.actions[timing.windup_action]
-                local chain=windup and windup.allowed_chain_actions and windup.allowed_chain_actions[armed.charged and "heavy_attack" or "light_attack"]
-                local wait=(timing.ready_in or 0)+(not armed.charged and chain and tonumber(chain.chain_time) or 0)/(ok and scale or 1)
-                local horizon=deps.Contact.horizon(settings,ok and scale or 1,wait)
-                local poses=deps.Contact.path(previous.world,now,request.time-previous.time,horizon)
-                local queried,result=pcall(options.contact,{poses=poses or {now},action=armed.action,time=request.time,horizon=horizon})
-                if not queried then emit("gesture_contact_error",{reason=tostring(result)}) else hit=result end
-            end
-            if hit and (armed.charged or buffered) then
+            local hit=look_ahead(armed.action,armed.charged)
+            -- The same swing seen twice, into the same enemy within the window:
+            -- the previous press not yet started by the server (a second press
+            -- would queue a second attack), or the swing carrying on the same
+            -- way. A back-swing is a new attack (review, 22 October).
+            local last=state.last_press
+            local d=last and last.direction and armed.direction and
+                last.direction[1]*armed.direction[1]+last.direction[2]*armed.direction[2]+last.direction[3]*armed.direction[3]
+            local consumed=last and component.start_t~=last.start_t
+            local recent=last and request.time-last.time<Runtime.DUPLICATE_WINDOW
+            local duplicate=hit and last and hit.unit~=nil and hit.unit==last.unit and
+                (not consumed and (recent or armed.duplicate) or consumed and recent and d~=nil and d>0)
+            if armed.charged and armed.start_t~=nil and component.start_t~=armed.start_t then
+                -- The server auto-completed the charge this swing was to release.
+                state.armed=nil
+                emit("gesture_whiff",{action=armed.action,time=request.time,armed_for=request.time-armed.time,reason="auto_complete"})
+            elseif duplicate then
+                -- Skipped, not dropped: the stroke may still press once it is a new attack.
+                if not armed.duplicate then
+                    armed.duplicate=true
+                    emit("gesture_duplicate",{action=armed.action,zone=hit.zone,time=request.time,since=request.time-last.time})
+                end
+            elseif hit and (armed.charged or buffered) and hit.ahead and hit.delay and hit.ahead>hit.delay+Runtime.PRESS_SLACK then
+                -- Still on its way: pressed when it is as far off as its damage,
+                -- or given up if it never gets that close.
+                if request.time-armed.time<Runtime.ARM_WAIT then
+                    armed.active=request.time
+                    if not armed.waited then
+                        armed.waited=true
+                        emit("gesture_wait",{action=armed.action,zone=hit.zone,time=request.time,ahead=hit.ahead,delay=hit.delay,
+                            blade=hit.blade})
+                    end
+                else
+                    state.armed=nil
+                    emit("gesture_whiff",{action=armed.action,time=request.time,armed_for=request.time-armed.time,reason="never_arrived"})
+                end
+            elseif hit and (armed.charged or buffered) then
                 if armed.charged then state.heavy=nil;state.release=request.frame else state.pulse=request.frame;state.release=nil end
                 state.commit_time=request.time;state.armed=nil
-                emit("gesture_contact",{action=armed.action,zone=hit.zone,step=hit.step,time=request.time,lead=request.time-armed.time})
-                aim_commit(armed.onset,virtual,offset,{action=armed.action,heavy=armed.charged,time=request.time,target=hit.position})
+                state.last_press={unit=hit.unit,action=armed.action,time=request.time,start_t=component.start_t,direction=armed.direction,
+                    behind=component.current_action_name~=nil and component.current_action_name~="none"}
+                state.reach={unit=hit.unit,action=armed.action,time=request.time,deadline=request.time+.8,heavy=armed.charged}
+                emit("gesture_contact",{action=armed.action,zone=hit.zone,step=hit.step,time=request.time,lead=request.time-armed.time,
+                    ahead=hit.ahead,delay=hit.delay,blade=hit.blade})
+                aim_commit(armed.onset,virtual,offset,{action=armed.action,heavy=armed.charged,time=request.time,target=hit.position,
+                    target_unit=hit.unit,delay=hit.delay})
             elseif not active and request.time-armed.active>.1 then
                 state.armed=nil
-                emit("gesture_whiff",{action=armed.action,time=request.time,armed_for=request.time-armed.time})
+                if not armed.duplicate then
+                    emit("gesture_whiff",{action=armed.action,time=request.time,armed_for=request.time-armed.time})
+                end
+            end
+        end
+        -- Evidence: when the weapon itself reaches the enemy a press was aimed
+        -- at, to set against when its damage lands (user, 22 October: damage
+        -- should land as the weapon arrives, at every swing speed).
+        -- visual: probed with the weapon as drawn, not the attack's longer box.
+        local reach=state.reach
+        if reach and seeking then
+            local now=capture_world(virtual)
+            local ok,result
+            if now then ok,result=pcall(options.contact,{poses={now},action=reach.action,time=request.time,horizon=0,visual=true}) end
+            local touching=ok and type(result)=="table" and result.unit==reach.unit
+            if touching or request.time>reach.deadline then
+                state.reach=nil
+                emit("weapon_reach",{action=reach.action,time=request.time,heavy=reach.heavy==true,
+                    after_press=touching and string.format("%.3f",request.time-reach.time) or "none"})
             end
         end
         if reason~=state.reason then emit("availability",{reason=reason}); state.reason=reason end
@@ -374,6 +620,7 @@ function Runtime.new(deps,options)
         state.authoring=true
         local support=virtual.support or virtual.raw_support
         state.current={pose=virtual,world=world,world_support=support and capture_world(support),stroke=status,timing=timing,offset=offset,source=options.source,
+            raw_world=seeking and request.dominant and capture_world(request.dominant) or nil,
             frame=request.frame,time=request.time,pose_time=request.pose_time or request.time}
         -- The last moments of the WORLD path: a stroke commits only after its
         -- motion has travelled, and binds a native frame later still.
@@ -383,20 +630,10 @@ function Runtime.new(deps,options)
         state.history=history
         return state.current,true
     end
-    local function feint(frame)
-        local value=state.feint
-        if not value then return nil end
-        value.frame=value.frame or frame
-        local age=frame-value.frame
-        if age<0 or age>Runtime.FEINT_BLOCK then state.feint=nil;return nil end
-        return age
-    end
     function api.inputs(frame)
         if type(frame)~="number" or frame~=frame or frame<0 or frame~=math.floor(frame) then
             return {pressed=false,held=false,released=false}
         end
-        local age=feint(frame)
-        if age then return {pressed=false,held=age<Runtime.FEINT_HOLD,released=age==Runtime.FEINT_HOLD} end
         if state.heavy then return {pressed=state.heavy.frame==frame,held=true,released=false} end
         if state.follow then return {pressed=state.push_frame==frame,held=true,released=false} end
         local pressed=state.pulse==frame or state.push_frame==frame
@@ -406,12 +643,6 @@ function Runtime.new(deps,options)
     end
     function api.block_inputs(frame)
         local current=state.current and state.current.frame==frame and state.block_output
-        local age=type(frame)=="number" and feint(frame)
-        if age then
-            local held=age<Runtime.FEINT_BLOCK or current and current.held
-            return {pressed=age==0 or current and current.pressed or false,held=held or false,
-                released=not held and (age==Runtime.FEINT_BLOCK or current and current.released) or false}
-        end
         return current or {pressed=false,held=false,released=false}
     end
     function api.allow_chain(handler,chain,t)
@@ -440,7 +671,7 @@ function Runtime.new(deps,options)
         -- The stock combo may have reset or advanced since the stroke was
         -- committed. Admit only the actual live windup's matching input edge,
         -- rather than comparing its destination with a cached combo entry.
-        local windup=running and running.kind=="windup" and running
+        local windup=running and deps.Timing.is_windup(running.kind) and running
         local edge=windup and windup.allowed_chain_actions and
             windup.allowed_chain_actions[state.native_input]
         local matches=edge==chain
@@ -459,6 +690,8 @@ function Runtime.new(deps,options)
         return selected
     end
     function api.latest() return state.current end
+    -- The enemy the latest press was aimed at, and when (diagnostics).
+    function api.last_press() local last=state.last_press; return last and last.unit,last and last.time end
     function api.current_action() return state.action end
     function api.owns(action) return state.suppressed[action]~=nil end
     function api.on_start(action,settings,t)
@@ -666,9 +899,9 @@ function Runtime.new(deps,options)
     function api.close()
         if state.closed then return end
         api.invalidate("closed"); state.closed=true; owner.close()
-        Runtime.release_source(options.unit,api)
+        Runtime.release_source(lease,api)
     end
-    Runtime.claim_source(options.unit,api)
+    Runtime.claim_source(lease,api)
     return api
 end
 return Runtime

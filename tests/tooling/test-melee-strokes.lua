@@ -141,6 +141,105 @@ do
     for _=1,20 do request.point={request.point[1],request.point[2]+.03,0}; step() end
     assert(count()==2,'a swing turning away without stopping was lost')
 end
+-- Speed-sensitive arming (user, 22 October: a fast swing's hit lagged its
+-- contact). A fast swing qualifies after less travel than a slow one, so its
+-- attack is pressed sooner; a slow swing keeps the full travel.
+do
+    local function travel_at_commit(step_m)
+        local owner,request,step,settle,swing,count=fixture()
+        settle()
+        local start=request.point[1]
+        for i=1,40 do
+            step(start+step_m*i)
+            if count()>0 then return request.point[1]-start end
+        end
+    end
+    local fast,slow=travel_at_commit(.03),travel_at_commit(.013)
+    assert(slow and slow>=.18,'a slow swing committed early: '..tostring(slow))
+    assert(fast and fast<=.12,'a fast swing (3 m/s) needed the full travel: '..tostring(fast))
+    -- An enemy already on the swing's path (the owner's look-ahead): even a
+    -- slow swing qualifies at the floors, so its attack is pressed at once.
+    local owner,request,step,settle,swing,count=fixture()
+    settle(); request.target_ahead=true
+    local start=request.point[1]
+    local ahead
+    for i=1,40 do step(start+.013*i); if count()>0 then ahead=request.point[1]-start; break end end
+    assert(ahead and ahead<=.1,'a swing with an enemy ahead waited for the full travel: '..tostring(ahead))
+end
+-- Worn 22 October: a reset during a continuous fight (no pause at any
+-- reversal) left the detector settling for 12 s. After a reset the motion it
+-- interrupted stays spent, and a swing turning 60 degrees away re-arms, as
+-- after any stroke.
+do
+    local owner,request,step,settle,swing,count=fixture()
+    settle()
+    local function leg(sign,frames) for _=1,frames do step(request.point[1]+sign*.02) end end
+    leg(1,20); leg(-1,20)
+    local before=count()
+    assert(before>=1,'continuous back-and-forth fixture did not commit')
+    leg(1,10)
+    local reset_at=count()
+    request.reference={}; step(request.point[1]+.02)
+    assert(owner.status().reason=='status' and owner.status().phase=='settling','reference change did not reset motion')
+    leg(1,10)
+    assert(count()==reset_at,'the motion a reset interrupted committed as a new stroke')
+    for _=1,3 do leg(-1,20); leg(1,20) end
+    assert(count()-reset_at>=4,'continuous swings after a reset stayed unarmed: '..(count()-reset_at))
+    local snapshot=owner.status()
+    assert(snapshot.last_reset=='reference_changed','reset cause not reported: '..tostring(snapshot.last_reset))
+end
+-- Review, 22 October. A reset in the middle of one big arc does not turn
+-- the rest of that arc into a second stroke: settling follows its heading.
+do
+    local owner,request,step,settle,swing,count=fixture()
+    request.point={.6,0,0}; settle()
+    local dt,rate=1/72,5
+    local reset_frame
+    for i=1,38 do
+        local angle=rate*dt*i
+        request.point={.6*math.cos(angle),.6*math.sin(angle),0}
+        if math.deg(angle)>=40 and not reset_frame then reset_frame=i;request.reference={} end
+        step(nil,dt)
+    end
+    assert(count()==1,'one arc, reset mid-way, committed '..count()..' strokes')
+end
+-- One glitched sideways frame right after a reset cannot set the heading;
+-- the straight motion it interrupted carries on without a second stroke.
+do
+    local owner,request,step,settle,swing,count=fixture()
+    settle()
+    for _=1,12 do step(request.point[1]+.02) end
+    assert(count()==1)
+    request.reference={}; step(request.point[1]+.02)
+    request.point={request.point[1]+.02,.05,0}; step(nil)
+    request.point={request.point[1]+.02,0,0}; step(nil)
+    for _=1,12 do step(request.point[1]+.02) end
+    assert(count()==1,'a glitch frame after a reset turned the same motion into a second stroke')
+end
+-- Block held with a still hand, then let go into an immediate swing: the
+-- counter-attack is a new swing, not an interrupted motion.
+do
+    local owner,request,step,settle,swing,count=fixture()
+    settle(); request.guarding=true
+    for _=1,30 do step() end
+    request.guarding=false
+    for _=1,12 do step(request.point[1]+.02) end
+    assert(count()==1,'the first swing after a still block was swallowed')
+end
+-- Two consecutive tracking jumps at 90 Hz are not a fast swing.
+do
+    local owner,request,step,settle,swing,count=fixture()
+    settle(12)
+    step(request.point[1]+.05,1/90); step(request.point[1]+.05,1/90)
+    for _=1,10 do step(nil,1/90) end
+    assert(count()==0,'a two-frame tracking jump committed a stroke')
+end
+-- An invalidate's renewed reference does not mask its cause.
+do
+    local owner,request,step,settle,swing,count=fixture()
+    settle(); owner.invalidate(); request.reference={}; step(); step()
+    assert(owner.status().last_reset=='invalidated','reset cause masked: '..tostring(owner.status().last_reset))
+end
 -- Support intent is independent of dominant intent, never a sum of two
 -- alternating wiggles. Grip changes reset motion but cannot erase debt.
 do
@@ -184,7 +283,7 @@ do
         if result.suppressed_candidate then
             reports=reports+1
             assert(not result.committed and not result.collision_allowed and result.remaining==0)
-            assert(result.suppressed_candidate.travel>=.18 and not result.suppressed_candidate.native_ready)
+            assert(result.suppressed_candidate.travel>=.08 and not result.suppressed_candidate.native_ready)
         end
     end
     assert(count()==0 and reports==1,'suppressed-candidate observation changed admission or repeated')
@@ -217,4 +316,27 @@ for _,reverse in ipairs({false,true}) do
     end
     assert(committed and turned,'arc fixture did not commit and turn')
 end
-print('melee_strokes=pass deliberate_motion whiff_recovery per_target 50hz_jitter stationary_overlap no_banking weapon_mode_reference tracking native_readiness live_speed duplicate_clock suppression_observation curved_arc reversal_ends')
+-- PC runs 22-23 October: combataxe_p2 at medium speed never struck. Its tip
+-- curled as the swing set off (8 cm of path, 6 cm net in 58 ms) and the
+-- whole swing was dropped as spent; it carried on in the same direction, so
+-- nothing re-armed it. A curl at speed restarts the measure instead.
+do
+    local owner,request,step,settle,swing,count=fixture()
+    settle()
+    local raw=0
+    local function at(x,y)
+        raw=raw+.025; request.raw_override={raw,0,0}
+        request.point={x,y,0}; return step()
+    end
+    at(0,.03); at(.005,.045)
+    local curled=at(.03,.045)
+    assert(curled.dropped and curled.dropped.restarted and count()==0,'curl fixture did not curl')
+    for i=1,10 do at(.03+.025*i,.045) end
+    assert(count()==1,'a swing whose start curled was lost')
+    -- A stop still ends a motion: nothing restarts below stop speed.
+    local owner2,request2,step2,settle2,swing2,count2=fixture()
+    settle2(); swing2(.05,4)
+    for _=1,3 do step2(request2.point[1]+.001) end
+    assert(owner2.status().phase~='candidate','a stopped motion stayed a candidate')
+end
+print('melee_strokes=pass deliberate_motion whiff_recovery per_target 50hz_jitter stationary_overlap no_banking weapon_mode_reference tracking native_readiness live_speed duplicate_clock suppression_observation curved_arc reversal_ends curl_restart')

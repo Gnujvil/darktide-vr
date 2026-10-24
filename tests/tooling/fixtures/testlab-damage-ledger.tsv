@@ -1,0 +1,60 @@
+# Damage ledger fixture: one run's inputs, native attacks and hits, in order.
+# Shaped like a continuous-swing run with the failures seen in a headset
+# session: a press dropped by a lockout, attacks that start but deal nothing,
+# a charged heavy, a charge let go without a swing, a weapon special, a press
+# whose attack came too late to be its own, and a hit with no attack running.
+# t	event	arguments (space separated)
+# press <kind> | release | special | cancel <reason>
+# start <key> <action> <kind> | finish <key> <reason>
+# hit <zone> <damage> <result> <weakspot> <critical> <target>
+0.10	press	light
+0.12	release
+0.30	start	a1 light_attack_left sweep
+0.38	hit	head 120 died true false poxwalker_1
+0.40	hit	torso 80 damaged false false poxwalker_2
+0.70	finish	a1 action_complete
+0.75	press	light
+0.77	release
+0.95	start	a2 light_attack_right sweep
+1.10	press	light
+1.12	release
+1.40	finish	a2 action_complete
+1.50	press	light
+1.52	release
+1.70	start	a3 light_attack_left sweep
+1.80	hit	torso 0 shield_blocked false false shield_bearer
+2.10	finish	a3 action_complete
+2.20	press	heavy
+3.00	release
+3.05	start	a4 heavy_attack sweep
+3.15	hit	head 300 damaged true true ogryn
+3.50	finish	a4 action_complete
+3.60	press	heavy
+4.20	cancel	released_context_or_deadline
+4.25	release
+4.60	special
+4.65	start	a5 special_attack sweep
+4.75	hit	torso 50 damaged false false poxwalker_3
+5.00	finish	a5 action_complete
+5.10	press	light
+5.12	release
+6.00	hit	torso 10 damaged false false poxwalker_3
+6.50	start	a6 light_attack_right sweep
+6.90	finish	a6 action_complete
+7.00	press	push
+7.10	release
+# expect <field>=<value>: the run's damage_summary.
+expect	presses=6 light=5 heavy=1 scripted=0 specials=1 pushes=1 cancelled=1 cancelled_attacked=0
+expect	attacks=6 attacks_pressed=5 attacks_unpressed=1 attacks_damaged=3
+expect	hits=6 damaging_hits=5 head_hits=2 weakspot_hits=2 critical_hits=1 kills=1 damage=560.000
+expect	presses_damaged=2 presses_no_damage=4 presses_no_attack=2 presses_attack_no_damage=2 orphan_hits=1 dropped_rows=0
+# expect_press <press> <outcome> <attack>
+expect_press	1 damaged 1
+expect_press	2 attack_no_damage 2
+expect_press	3 no_attack none
+expect_press	4 attack_no_damage 3
+expect_press	5 damaged 4
+expect_press	6 cancelled none
+expect_press	7 special 5
+expect_press	8 no_attack none
+expect_press	9 push none

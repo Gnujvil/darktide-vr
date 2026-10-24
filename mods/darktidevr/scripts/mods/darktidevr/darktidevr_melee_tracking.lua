@@ -10,6 +10,8 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
     local deps={Timing=load("timing"),Volume=load("volume"),Planner=load("sweep_plan"),Bridge=load("action_bridge"),Defense=load("defense"),Tether=load("tether"),
         Contact=load("contact")}
     local Probe,Contact=load("probe"),deps.Contact
+    -- Authored paths from the game's own sweep spline (its anchor offsets).
+    deps.Timing.use_sampler(deps.Timing.engine_sampler())
     local defaults=require("scripts/settings/equipment/action_sweep_settings")
     local visual=load("visual").new()
     local api={}
@@ -22,6 +24,23 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
         mod:info("DARKTIDEVR_PHYSICAL event=%s source=tracking transport=bridge hardware_verified=false %s",kind,table.concat(parts," "))
     end
     local function main_time() return Managers.time:time("main") end
+    -- A runtime's events; hand marks the second hand of a dual weapon.
+    local function emit_for(hand)
+        return function(kind,data)
+            if hand then data.hand=hand end
+            log(kind,data)
+            -- The hit felt as the visible weapon reaches the enemy (user, 22 October).
+            if kind=="weapon_reach" and data.after_press~="none" and presentation.haptics and presentation.haptics.melee_contact then
+                presentation.haptics.melee_contact(data.heavy)
+            end
+        end
+    end
+    local function freeze_world(p,q)
+        return {position={Vector3.x(p),Vector3.y(p),Vector3.z(p)},rotation={Quaternion.to_elements(q)}}
+    end
+    local function world_components(value)
+        return Vector3(unpack(value.position)),Quaternion.from_elements(unpack(value.rotation))
+    end
     local function private()
         return game_mode()=="shooting_range" and Managers.state.game_session and Managers.state.game_session:is_server()
     end
@@ -37,10 +56,22 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
         return nil
     end
     state.latch=GestureAim.latch()
+    -- The character's recent mean velocity, for the look-ahead and the aim.
+    state.motion=Contact.motion()
     local function first_person(unit)
         local extension=ScriptUnit.has_extension(unit,"first_person_system")
         local component=extension and extension._first_person_component
         return component and component.position
+    end
+    -- The player character's velocity as {x,y,z}, or nil (read-only).
+    local function velocity(unit)
+        local v
+        pcall(function()
+            local data=ScriptUnit.has_extension(unit,"unit_data_system")
+            local locomotion=data and data:read_component("locomotion")
+            v=locomotion and locomotion.velocity_current
+        end)
+        return v and {Vector3.x(v),Vector3.y(v),Vector3.z(v)} or nil
     end
     local function engine_frame(yaw,pitch,roll,v)
         local r=Quaternion.rotate(Quaternion.from_yaw_pitch_roll(yaw,pitch,roll),Vector3(v[1],v[2],v[3]))
@@ -51,17 +82,43 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
         local head=first_person(unit)
         if not head then log("gesture_aim",{reason="head_unavailable"}); return end
         local settings=weapon.weapon_template.actions[data.action]
-        local path,_,bounds
-        if settings then path,_,bounds=deps.Timing.authored_path(weapon.weapon_template,settings) end
-        local center=bounds and {(bounds[1]+bounds[2])/2,(bounds[3]+bounds[4])/2,(bounds[5]+bounds[6])/2}
-        local yaw,pitch,roll,why=GestureAim.solve({Vector3.x(head),Vector3.y(head),Vector3.z(head)},data.points,path and path[#path],engine_frame,data.target,center)
+        local path,_,bounds,crossing,segment,boxes
+        -- A heavy keeps its own authored direction and the wrist's roll and
+        -- is only turned onto its contact (PC runs pcO/pcP, 22 October: an
+        -- overhead heavy rolled to a sideways swing, its path centre laid
+        -- through the target, swept past it); see GestureAim.point.
+        if settings then path,_,bounds,crossing,segment,boxes=deps.Timing.authored_path(weapon.weapon_template,settings) end
+        if data.heavy then path=nil end
+        local eye={Vector3.x(head),Vector3.y(head),Vector3.z(head)}
+        -- The attack's box where it is as far away as the target (or as one
+        -- of the target's zones it can reach), else its crosshair point, else
+        -- its bounds' centre (see Timing.aim_target).
+        local zones=data.target_unit and deps.Contact.zones(data.target_unit,require("scripts/utilities/attack/hit_zone")) or nil
+        -- Laid where the target will be relative to the head when the attack
+        -- lands, delay seconds on, the character moving (see Contact.lead).
+        local led,lead
+        led,zones,lead=deps.Contact.lead(eye,data.target,zones,data.delay,state.motion.velocity())
+        local target,_,center,moved=deps.Timing.aim_target(eye,led,crossing,segment,boxes,zones)
+        center=center or bounds and {(bounds[1]+bounds[2])/2,(bounds[3]+bounds[4])/2,(bounds[5]+bounds[6])/2}
+        local yaw,pitch,roll,why
+        if data.heavy and type(target)=="table" then
+            local rules=presentation.online_rules
+            local wrist=rules and rules.melee_wrist_roll and rules.melee_wrist_roll()
+            yaw,pitch,roll=GestureAim.point(eye,target,engine_frame,center,wrist)
+            why=yaw and "heavy_pointed" or pitch
+        else
+            yaw,pitch,roll,why=GestureAim.solve(eye,data.points,path and path[#path],engine_frame,target,center)
+        end
         if not yaw then log("gesture_aim",{reason=pitch,action=data.action,points=#data.points}); return end
         state.latch.push({time=data.time,yaw=yaw,pitch=pitch,roll=roll})
         log("gesture_aim",{action=data.action,yaw=string.format("%.3f",yaw),pitch=string.format("%.3f",pitch),
-            roll=roll and string.format("%.3f",roll) or "wrist",reason=why or "aligned",points=#data.points,time=data.time})
+            roll=roll and string.format("%.3f",roll) or "wrist",reason=data.heavy and "heavy_pointed" or why or "aligned",
+            points=#data.points,time=data.time,zone=moved and tostring(moved) or nil,
+            lead=lead and string.format("%.2f,%.2f,%.2f",lead[1],lead[2],lead[3]) or nil})
     end
-    -- Online trigger option: "contact" (default) presses when the stroke's
-    -- look-ahead reaches an enemy; "swing" presses on every stroke.
+    -- Online trigger option: "contact" (default) presses as soon as an enemy
+    -- lies on the stroke's way; "swing" presses on every stroke. Both aim
+    -- the press at the first enemy on its way.
     local function trigger_mode()
         return mod.get and mod:get("vr_online_melee_trigger")=="swing" and "swing" or "contact"
     end
@@ -75,10 +132,20 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
         if uses_matrix==nil then uses_matrix=type(settings and settings.sweeps)=="table" and #settings.sweeps>0 end
         local volume=settings and deps.Volume.resolve(template,settings,defaults,uses_matrix)
         if not volume or not extension._physics_world then return nil end
+        -- visual: the weapon as drawn, its box cut to the weapon's own length
+        -- along the box's long axis (when its blade really touches).
+        local length=args.visual and (args.length or state.weapon_length)
+        if length and volume.shape=="oobb" then
+            local axis=volume.offset[3]~=0 and 3 or 2
+            local half,offset={volume.half_extents[1],volume.half_extents[2],volume.half_extents[3]},{0,0,0}
+            half[axis]=length/2; offset[axis]=length/2
+            volume={shape="oobb",half_extents=half,offset=offset,corner_radius=math.sqrt(half[1]^2+(half[2]+offset[2])^2+(half[3]+offset[3])^2)}
+        end
         local sides=Managers.state.extension:system("side_system")
         local _,reach=deps.Timing.authored_path(template,settings)
         local head=first_person(unit)
-        local within=reach and head and Contact.within(head,reach*(settings.range_mod or 1)) or nil
+        local within=reach and head and Contact.within(head,reach*(settings.range_mod or 1),
+            {velocity=state.motion.velocity(),horizon=args.horizon,count=args.poses and #args.poses}) or nil
         return deps.Contact.query({world=extension._physics_world,volume=volume,filter="filter_player_character_melee_sweep",
             attacker=unit,Probe=Probe,HitZone=require("scripts/utilities/attack/hit_zone"),within=within,
             enemy=function(other) return not (sides and sides.side_by_unit[other] and sides:is_ally(unit,other)) end},args.poses)
@@ -94,10 +161,12 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
         return state.latch.current(name,settings and settings.kind,component and component.start_t,t)
     end
     function api.stop(reason)
-        local runtime=state.runtime
+        local runtime,off=state.runtime,state.off
         local orphan=not runtime and state.owner
         state.runtime=nil; state.owner=nil; state.unit=nil; api.support_held=false; state.lock=nil; state.lock_pose=nil
+        state.off=nil
         if runtime then runtime.close() end
+        if off then off.runtime.close() end
         if orphan then orphan.close() end
         visual.restore()
         if runtime then log("stopped",{reason=reason}) end
@@ -169,9 +238,17 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
         local x,y,z,w=Quaternion.to_elements(Quaternion.multiply(anchor,q))
         return {position={Vector3.x(local_p)/scale,Vector3.y(local_p)/scale,Vector3.z(local_p)/scale},rotation={x,y,z,w}}
     end
+    -- The character's ground speed (stick, VR StrideS or roomscale walking).
+    local function walk_speed(unit)
+        local data=ScriptUnit.has_extension(unit,"unit_data_system")
+        local locomotion=data and data:read_component("locomotion")
+        local v=locomotion and locomotion.velocity_current
+        return v and math.sqrt(Vector3.x(v)^2+Vector3.y(v)^2) or 0
+    end
     local function advance(handler,dt,t,frame,input)
         local unit,extension,weapon,slot=context(handler,input)
         if not unit then api.stop("context_unavailable"); return end
+        state.motion.add(t,velocity(unit))
         local dominant=presentation.hand_side("dominant")
         local support=presentation.hand_side("support")
         local raw=pose(dominant)
@@ -192,22 +269,42 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
             if not owner then error(reason) end
             state.owner=owner; state.unit=unit; state.weapon=weapon; state.session=session; state.slot=slot; state.side=dominant
             state.reference={}; state.recenter=nil; state.transport=nil; state.authority=mode; state.trigger=trigger; state.latch.clear()
+            state.weapon_length=config.body and config.body.length
             state.runtime=Runtime.new(deps,{source="tracking",owner=owner,strokes=state.strokes,unit=unit,
                 extension=extension,weapon=weapon,slot=slot,defaults=defaults,cancel_on_adopt=mode=="physical",native_events=true,
                 authority=mode,on_commit=mode=="stock" and function(data) commit_aim(unit,weapon,data) end or nil,
-                contact=trigger=="contact" and function(args) return contact_query(unit,extension,weapon,args) end or nil,
-                to_world=api.world_pose,to_world_direction=api.world_direction,emit=log,cancel_native=function(time)
+                contact=mode=="stock" and function(args) return contact_query(unit,extension,weapon,args) end or nil,trigger=trigger,
+                to_world=api.world_pose,to_world_direction=api.world_direction,emit=emit_for(nil),cancel_native=function(time)
                     if mode=="physical" and Unit.alive(unit) and extension._weapons[slot]==weapon and private() then
                         extension:stop_action("unwield",nil,time,false)
                     end
-                end,freeze_world=function(p,q)
-                    return {position={Vector3.x(p),Vector3.y(p),Vector3.z(p)},rotation={Quaternion.to_elements(q)}}
-                end,world_components=function(value)
-                    return Vector3(unpack(value.position)),Quaternion.from_elements(unpack(value.rotation))
-                end,sticky_frame=function(action) return deps.Tether.native_frame(action,api.body_pose) end})
+                end,freeze_world=freeze_world,world_components=world_components,
+                sticky_frame=function(action) return deps.Tether.native_frame(action,api.body_pose) end})
             log("started",{profile=config.profile,weapon=weapon.weapon_template.name,inertia_source=config.source,authority=mode,trigger=trigger,
                 inertia_id=config.id,estimated=config.estimated or false,mass=config.body and config.body.mass,
                 length=config.body and config.body.length})
+            -- A dual weapon's other blade swings on its own (user, 22 October:
+            -- "swings should work with both hands"): its own body, swings,
+            -- look-ahead and aim, pressing the same stock attack. The trigger,
+            -- heavy charge, block and push stay with the weapon hand.
+            if mode=="stock" and config.off then
+                local off_config=config.off
+                off_config.library_path=options.library_path
+                local off_owner,off_reason=Pose.new(Inertia,off_config)
+                if not off_owner then error(off_reason) end
+                local length=off_config.body and off_config.body.length
+                local off={side=support,length=length,strokes=Strokes.new()}
+                off.runtime=Runtime.new(deps,{source="tracking",owner=off_owner,strokes=off.strokes,unit=unit,lease=off,
+                    extension=extension,weapon=weapon,slot=slot,defaults=defaults,cancel_on_adopt=false,native_events=true,
+                    authority=mode,on_commit=function(data) commit_aim(unit,weapon,data) end,
+                    contact=function(args) args.length=length;return contact_query(unit,extension,weapon,args) end,trigger=trigger,
+                    to_world=api.world_pose,to_world_direction=api.world_direction,emit=emit_for("off"),
+                    cancel_native=function() end,freeze_world=freeze_world,world_components=world_components,
+                    sticky_frame=function(action) return deps.Tether.native_frame(action,api.body_pose) end})
+                state.off=off
+                log("started",{hand="off",side=support,profile=off_config.profile,weapon=weapon.weapon_template.name,
+                    mass=off_config.body and off_config.body.mass,length=length})
+            end
         end
         if state.recenter~=tracking.head_recenter_generation or state.transport~=tracking.last_transport_generation then
             state.reference={}; state.recenter=tracking.head_recenter_generation; state.transport=tracking.last_transport_generation
@@ -215,9 +312,12 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
         local cache_index=handler:_buffer_index(frame)
         local guarding=state.guard_intent==true
         local result,reason,released=state.runtime.sample({source="tracking",active=true,tracking_valid=true,reference=state.reference,
-            dominant=raw,support=pose(support),support_held=api.support_held==true and pose(support)~=nil,
+            -- A dual weapon's other hand holds its own blade, not this grip.
+            dominant=raw,support=not state.off and pose(support) or nil,
+            support_held=not state.off and api.support_held==true and pose(support)~=nil,
             intent=true,guarding=guarding,pose_block=mod.get and mod:get("vr_pose_block")==true,
-            heavy_intent=state.heavy_intent,followup_intent=state.heavy_intent,time=t,frame=frame})
+            heavy_intent=state.heavy_intent,followup_intent=state.heavy_intent,time=t,frame=frame,
+            walk_speed=walk_speed(unit)})
         -- Pulling away from a sticky contact (a chainsword lock-on) releases
         -- that stroke only; failing here would disable physical melee, and
         -- the attack inputs it claims, until the profile changed.
@@ -262,13 +362,36 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
                 return ScriptUnit.extension(unit,"unit_data_system"):read_component(slot).special_active
             end)
             log("motion_stall",{phase=stroke and stroke.phase,reason=stroke and stroke.reason,seconds=string.format("%.2f",t-stall.since),
+                last_reset=stroke and stroke.last_reset,
+                reset_age=stroke and stroke.last_reset_at and string.format("%.2f",t-stroke.last_reset_at),
                 travel=string.format("%.2f",stall.travel),timing=result.timing~=nil,native_ready=result.timing and result.timing.ready,
                 ready_in=result.timing and result.timing.ready_in,guarding=guarding,heavy_intent=state.heavy_intent,
                 special_active=ok and tostring(special) or "unknown",action=extension._weapon_action_component.current_action_name,
                 authority=state.authority})
             stall.logged=t;stall.since=t;stall.travel=0
         end
-        local bindings={{"action_one",state.runtime.inputs(frame)},{"action_two",state.runtime.block_inputs(frame)}}
+        local attack=state.runtime.inputs(frame)
+        local off=state.off
+        if off then
+            local hand=pose(off.side)
+            local off_result,off_reason
+            if hand then
+                off_result,off_reason=off.runtime.sample({source="tracking",active=true,tracking_valid=true,reference=state.reference,
+                    dominant=hand,support_held=false,
+                    -- A held trigger is the weapon hand's heavy; only that
+                    -- hand's swing releases it, so the other hand waits.
+                    intent=state.heavy_intent~=true,guarding=guarding,pose_block=false,
+                    heavy_intent=false,followup_intent=false,time=t,frame=frame})
+            end
+            if off_result then off.sample_main=main_time()
+            elseif hand and off.reason~=off_reason then log("off_hand_unavailable",{reason=off_reason}) end
+            off.reason=off_reason
+            -- Either hand's press is the attack input; held while either holds.
+            local other=off.runtime.inputs(frame)
+            local held=attack.held or other.held
+            attack={pressed=attack.pressed or other.pressed,held=held,released=not held and (attack.released or other.released)}
+        end
+        local bindings={{"action_one",attack},{"action_two",state.runtime.block_inputs(frame)}}
         if state.authority=="stock" and state.block_raw then
             -- Online the block button stays stock; the runtime only adds to it.
             local raw,own=state.block_raw,bindings[2][2]
@@ -330,7 +453,11 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
             not presentation.gameplay_context.ui_blocks_gameplay(Managers.ui) and
             state.unit and Unit.alive(state.unit) and state.session==Managers.state.game_session and
             state.recenter==tracking.head_recenter_generation and state.transport==tracking.last_transport_generation and
-            tracking[presentation.hand_side("dominant").."_grip_tracking_live"] and state.authority=="physical" and private()
+            tracking[presentation.hand_side("dominant").."_grip_tracking_live"] and
+            -- The tracked weapon is always what is shown, on either route
+            -- (user, 22 October): stock attack, heavy and block animations
+            -- never replace the VR hand. Online this is only a local view.
+            (state.authority=="stock" or state.authority=="physical" and private())
     end
     function api.world_grip(side)
         if side~="left" and side~="right" then return nil end
@@ -340,6 +467,17 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
             return Vector3(unpack(value.position)),Quaternion.from_elements(unpack(Grip.from_hilt(value.rotation)))
         end
         if not api.active() then return nil end
+        -- Online only the weapon hand shows the tracked weapon; the other hand
+        -- keeps its live controller pose, not the fixed-update snapshot
+        -- (review, 22 October: off-hand judder online).
+        if state.authority=="stock" and side~=presentation.hand_side("dominant") then
+            -- A dual weapon's other blade is drawn from its own runtime.
+            local off=state.off
+            local latest=off and off.side==side and off.runtime.latest()
+            local age=off and off.sample_main and main_time()-off.sample_main
+            if not latest or not age or age<0 or age>.1 or not tracking[side.."_grip_tracking_live"] then return nil end
+            return Vector3(unpack(latest.world.position)),Quaternion.from_elements(unpack(Grip.from_hilt(latest.world.rotation)))
+        end
         local current=state.runtime.latest()
         if not tracking[side.."_grip_tracking_live"] then return nil end
         local value=current.world_support
@@ -364,7 +502,23 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
     function api.on_start(action,settings,t)
         if state.runtime and state.runtime.on_start(action,settings,t) then state.owned[action]=state.runtime; return true end
         -- A live runtime that declines a sweep (a weapon special) leaves it stock.
-        if state.runtime and state.runtime.latest() and action._player_unit==state.unit then state.stock_sweeps[action]=true; return nil end
+        if state.runtime and state.runtime.latest() and action._player_unit==state.unit then
+            -- Each stock attack's outcome is logged when it ends, so a press
+            -- that did not land shows in the evidence (worn 22 October).
+            local component=action._weapon_action_component
+            -- A client's rollback replays starts, finishes and hits; only the
+            -- first simulation of an attack is recorded (review, 22 October).
+            local resimulating=action._unit_data_extension and action._unit_data_extension.is_resimulating
+            -- The enemy its press was aimed at: online, a miss is often one a
+            -- teammate killed or the AI moved before the server's sweep (worn
+            -- 23 October: 25% of online attacks hit nothing, 10% locally).
+            local pressed=state.runtime and state.runtime.last_press and state.runtime.last_press()
+            state.stock_sweeps[action]=resimulating and (state.stock_sweeps[action] or true) or
+                {name=component and component.current_action_name,kind=settings and settings.kind,
+                    start=t,targets=0,hits=0,corpse_hits=0,units={},zones={},pressed=pressed,
+                    pressed_alive=pressed~=nil and HEALTH_ALIVE~=nil and HEALTH_ALIVE[pressed]==true or nil}
+            return nil
+        end
         if state.claimed_active and state.claimed_authority=="physical" and action._player_unit==state.claimed_unit and action._weapon==state.claimed_weapon and
                 not action._unit_data_extension.is_resimulating then
             state.blocked[action]=true
@@ -397,7 +551,19 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
         return handled
     end
     function api.on_finish(action,t)
-        state.blocked[action]=nil;state.stock_sweeps[action]=nil
+        local record=state.stock_sweeps[action]
+        local resimulating=action._unit_data_extension and action._unit_data_extension.is_resimulating
+        if type(record)=="table" and not resimulating then
+            log("attack_outcome",{authority=state.authority,action=record.name,kind=record.kind,targets=record.targets,hits=record.hits,
+                corpse_hits=record.corpse_hits,
+                zones=#record.zones>0 and table.concat(record.zones,",") or "none",
+                seconds=type(t)=="number" and type(record.start)=="number" and string.format("%.2f",t-record.start) or nil,
+                pressed_hit=record.pressed~=nil and record.units[record.pressed]~=nil or nil,
+                pressed_alive_start=record.pressed_alive,
+                pressed_alive_end=record.pressed~=nil and HEALTH_ALIVE~=nil and HEALTH_ALIVE[record.pressed]==true or nil})
+        end
+        if not resimulating then state.stock_sweeps[action]=nil end
+        state.blocked[action]=nil
         local runtime=state.owned[action]
         if runtime then runtime.on_finish(action,t) end
     end
@@ -409,8 +575,24 @@ function Tracking.install(mod,presentation,tracking,game_mode,options)
         local runtime=state.owned[action]
         return runtime and runtime.native_event(action,name,invoke,...) or false
     end
-    function api.before_hit(action,target)
+    function api.before_hit(action,target,zone)
         if state.blocked[action] then return false end
+        local record=state.stock_sweeps[action]
+        local resimulating=action._unit_data_extension and action._unit_data_extension.is_resimulating
+        if type(record)=="table" and not resimulating then
+            record.hits=record.hits+1
+            -- The stock sweep reaches _process_hit for anything ALIVE; a body
+            -- without health is counted apart, so targets means living ones.
+            if target~=nil and HEALTH_ALIVE and not HEALTH_ALIVE[target] then
+                record.corpse_hits=record.corpse_hits+1
+            elseif target~=nil and not record.units[target] then
+                -- The first living hit, timed by this log line against the
+                -- weapon_reach of its press (user, 22 October).
+                if record.targets==0 then log("attack_hit",{action=record.name,zone=tostring(zone or "unknown")}) end
+                record.units[target]=true; record.targets=record.targets+1
+                if #record.zones<6 then record.zones[#record.zones+1]=tostring(zone or "unknown") end
+            end
+        end
         local runtime=state.owned[action]
         if not runtime then return nil end
         if runtime~=state.runtime or not api.active() then return false end

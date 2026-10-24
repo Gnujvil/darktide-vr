@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory)][ValidateSet('enter','spawn','attacker','group','run','threat','stop','status','buffs','inventory','weapon','reset','recenter','reload','quit','combat','aimcheck','particles','template')][string] $Command,
+    [Parameter(Mandatory)][ValidateSet('enter','spawn','attacker','group','run','threat','stop','status','buffs','inventory','weapon','reset','recenter','reload','quit','combat','aimcheck','particles','template','wield','rangedsweep','ping','verbose','modules','viewcone','home','motionfix')][string] $Command,
     [string] $Arguments='',
     [string] $GameRoot='C:/Program Files (x86)/Steam/steamapps/common/Warhammer 40,000 DARKTIDE',
     [ValidateRange(1,60)][int] $TimeoutSeconds=10

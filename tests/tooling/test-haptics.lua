@@ -177,6 +177,25 @@ do
     shove({_player_unit = local_unit}, 1)
     assert(#pulses == 6, "informative mode dropped a melee hit or shove")
     mode = "immersive"
+    -- Online melee: the hit is felt when the visible weapon reaches the enemy;
+    -- that attack's damage effects then stay quiet for CONTACT_HOLD (user,
+    -- 22 October), and a later hit pulses again.
+    do
+        local fixed, saved_time = 500, Managers.time.time
+        Managers.time.time = function() return fixed end
+        local before = #pulses
+        installed.melee_contact(false)
+        assert(#pulses == before + 1 and math.abs(pulses[#pulses][2] - Haptics.KINDS.melee_hit.amplitude * Haptics.LIGHT_MELEE_SCALE) < 1e-6,
+            "weapon contact did not pulse")
+        fixed = fixed + .3
+        hit({_player_unit = local_unit}, {}, {melee_attack_strength = "light"})
+        assert(#pulses == before + 1, "the contacted attack pulsed again when its damage landed")
+        fixed = fixed + Haptics.CONTACT_HOLD
+        hit({_player_unit = local_unit}, {}, {melee_attack_strength = "light"})
+        assert(#pulses == before + 2, "a later hit stayed quiet")
+        Managers.time.time = saved_time; clock = math.max(clock, fixed + 10)
+        for _ = 1, #pulses - before do table.remove(pulses) end -- later checks count absolute pulses
+    end
     -- Menu sounds: both modes, and only while the VR pointer owns menus.
     local sound = hook("UIManager", "play_2d_sound")
     assert(sound, "UI sound hook")
@@ -293,4 +312,4 @@ assert(Haptics.menu_kind("wwise/events/ui/play_ui_talents_default_select") == "m
 assert(Haptics.menu_kind("wwise/events/ui/play_ui_background_music") == nil and Haptics.menu_kind(nil) == nil)
 assert(Haptics.plays("menu_hover", "informative") and Haptics.plays("menu_hover", "immersive"))
 assert(Haptics.plays("menu_confirm", "informative") and Haptics.plays("menu_confirm", "immersive"))
-print("haptics=pass mapping rate_limit notices modes failed_send ammo_events scale body_events melee_hooks shot_families gauges melee_windup_special interaction strength menu")
+print("haptics=pass mapping rate_limit notices modes failed_send ammo_events scale body_events melee_hooks contact_pulse shot_families gauges melee_windup_special interaction strength menu")

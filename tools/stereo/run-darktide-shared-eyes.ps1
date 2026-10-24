@@ -85,6 +85,8 @@ $knownPatchedSha256 = @(
     '175bab6527e94212562bc61c294172b6ef4830191b7e957bb9d1b98c9953efde'
     # 1.13.3: exact pristine 119f6c84... with only the two audited bytes changed.
     '849cebf1d1e744b631bacd9236a4b51ec5ba8172a097c656b192fd7888979dc7'
+    # 1.13.4: exact pristine 43803e11... with only the two audited bytes changed.
+    '06b4da6d290f2e833dfa2be7af5eee9afdd778d1098a094294d13e60e1e84a01'
 )
 
 if (-not (Test-Path -LiteralPath $GameExe -PathType Leaf)) {

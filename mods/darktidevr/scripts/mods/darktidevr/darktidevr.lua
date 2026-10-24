@@ -5220,7 +5220,14 @@ end
 function presentation.at_calibrated_eye_height(position, unit)
     local height = presentation.calibrated_eye_height()
     if not height or not position or not unit or not Unit.alive(unit) then return position end
-    height = height * presentation.game_height_fraction(unit)
+    -- In the character's units, as head motion and the body frame are: an
+    -- ogryn's world shrinks to the player (character scale above 1), so its
+    -- standing eyes sit at the calibrated height times that scale. Unscaled,
+    -- the ogryn looked out from its belly (worn, 23 October: 1.81 m on an
+    -- ogryn whose eyes are 2.17 m up). Humans are scale 1.
+    local player = Managers and Managers.player and Managers.player:local_player(1)
+    local scale = tonumber((presentation.calibrated_character_scale(player))) or 1
+    height = height * scale * presentation.game_height_fraction(unit)
     return Vector3(Vector3.x(position), Vector3.y(position), Vector3.z(Unit.world_position(unit, 1)) + height)
 end
 function presentation.anchor_head_position(first_person_extension)
@@ -7121,6 +7128,30 @@ mod:hook_safe(
                     controller_observation.gameplay_movement[0])
                 local move_y = tonumber(
                     controller_observation.gameplay_movement[1])
+                local device_ok, device_axis = pcall(presentation.controller_movement_is_device_axis)
+                local auto_sprint, auto_sprint_owned = presentation.controller_bindings.sample_auto_sprint(
+                    device_ok and not device_axis, move_x, move_y,
+                    controller_observation.last_transport_generation)
+                if auto_sprint_owned then
+                    local sprint_cache = self._input_cache[self._action_lookup.sprint]
+                    local sprinting_cache = self._input_cache[self._action_lookup.sprinting]
+                    local hold_cache = self._input_cache[self._action_lookup.hold_to_sprint]
+                    -- Manual sprint keeps its stock toggle/hold setting. The
+                    -- automatic request uses hold semantics, including its
+                    -- release, without changing the player's saved setting.
+                    local manual_sprint = bit.band(gameplay_held, 128) ~= 0 or
+                        (sprint_cache and sprint_cache[cache_index]) or
+                        (sprinting_cache and sprinting_cache[cache_index])
+                    if hold_cache and not manual_sprint then hold_cache[cache_index] = true end
+                    -- A hold lets stock weapon actions finish before sprinting;
+                    -- a synthetic press would interrupt reloads and attacks.
+                    if auto_sprint then gameplay_held = bit.bor(gameplay_held, 128) end
+                end
+                -- Scale locomotion only, after the raw-axis sprint decision.
+                -- Scanner knobs keep their original axis range and sensitivity.
+                if device_ok and not device_axis then
+                    move_x, move_y = presentation.controller_bindings.scale_movement(move_x, move_y)
+                end
                 move_x, move_y = presentation.rotate_controller_movement(
                     move_x, move_y)
                 -- Cache references and scalar values avoid three temporary
@@ -8984,6 +9015,40 @@ function presentation.apply_calibrated_body_height(world, unit, local_player)
     return true, "calibrated"
 end
 
+-- An avatar much broader than the player starts its arms far outside the
+-- player's own: an ogryn's shoulders span 0.45 of its eye height against a
+-- human's 0.23, so at the player's scale their reach covered only half its
+-- arm and the elbows folded (worn, 23 October). Its collarbones shorten until
+-- the shoulder joints sit at the player's width in the character's units; the
+-- arms then fit the remaining reach, shortened down to NARROWED_ARM_MIN.
+-- PLAYER_SHOULDER_RATIO: the human avatar's shoulder width over its eye height
+-- (0.4114 m at 1.81 m, the same worn session). Presentation only.
+presentation.PLAYER_SHOULDER_RATIO = 0.2273
+presentation.NARROWED_ARM_MIN = 0.70
+-- The collarbone scale that brings the shoulder joints to target_width (both
+-- collarbones shortened by the same factor about their roots), the width
+-- before and the width after; nil when the avatar is not broader. Positions
+-- are {x, y, z} arrays. Pure.
+function presentation.shoulder_narrowing(left_root, left_joint, right_root, right_joint, target_width)
+    local function sub(a, b) return { a[1] - b[1], a[2] - b[2], a[3] - b[3] } end
+    local span = sub(right_joint, left_joint)
+    local width = math.sqrt(span[1] ^ 2 + span[2] ^ 2 + span[3] ^ 2)
+    if not target_width or target_width <= 0 or width < 1e-6 or width <= target_width * 1.05 then
+        return nil
+    end
+    local axis = { span[1] / width, span[2] / width, span[3] / width }
+    -- How far each collarbone carries its joint outward along the shoulder line.
+    local function outward(root, joint, sign)
+        local d = sub(joint, root)
+        return sign * (d[1] * axis[1] + d[2] * axis[2] + d[3] * axis[3])
+    end
+    local out = (outward(left_root, left_joint, -1) + outward(right_root, right_joint, 1)) * 0.5
+    if out < 0.01 then return nil end
+    local inner = width * 0.5 - out
+    local factor = math.max(0.2, math.min(1, (target_width * 0.5 - inner) / out))
+    return factor, width, (inner + out * factor) * 2
+end
+
 -- Visual body height/world scale is resolved first. The residual below changes
 -- only authored upper-limb bone lengths needed to fit the live scaled skeleton;
 -- it cannot change IPD, head translation, collision, or controller targets.
@@ -8998,7 +9063,7 @@ function presentation.apply_calibrated_arm_length(world, unit)
     if cache and cache.unit == unit and cache.result == result then
         local changed = false
         for _, record in pairs(cache.nodes) do
-            local desired = record.authored:unbox() * cache.residual
+            local desired = record.authored:unbox() * (record.factor or cache.residual)
             if presentation.vector_distance(
                     Unit.local_position(unit, record.node), desired) >
                     0.00001 then
@@ -9066,8 +9131,31 @@ function presentation.apply_calibrated_arm_length(world, unit)
     local local_player = Managers and Managers.player and
         Managers.player:local_player(1)
     local height_scale = presentation.calibrated_character_scale(local_player)
+    -- A broader avatar's shoulders narrow to the player's (see above). Only
+    -- where each shoulder joint hangs directly off its collarbone.
+    local narrowed, narrow_factor, narrow_reason = nil, nil, "not_broader"
+    local fitted_width = shoulder_width
+    local eye_height = presentation.calibrated_eye_height()
+    local target_width = eye_height and presentation.PLAYER_SHOULDER_RATIO * eye_height * height_scale
+    if target_width and Unit.has_node(unit, "j_leftshoulder") and Unit.has_node(unit, "j_rightshoulder") then
+        local left_root, right_root = Unit.node(unit, "j_leftshoulder"), Unit.node(unit, "j_rightshoulder")
+        local left_joint, right_joint = Unit.node(unit, names.left[1]), Unit.node(unit, names.right[1])
+        local function array(v) return { Vector3.x(v), Vector3.y(v), Vector3.z(v) } end
+        local factor, _, width = presentation.shoulder_narrowing(
+            array(position("j_leftshoulder")), array(position(names.left[1])),
+            array(position("j_rightshoulder")), array(position(names.right[1])), target_width)
+        if factor and (Unit.scene_graph_parent(unit, left_joint) ~= left_root or
+                Unit.scene_graph_parent(unit, right_joint) ~= right_root) then
+            narrow_reason = "joint_not_on_collarbone"
+        elseif factor then
+            narrowed = { left_joint, right_joint }
+            narrow_factor, fitted_width, narrow_reason = factor, width, "narrowed"
+        end
+    elseif not target_width then
+        narrow_reason = "standing_height_unavailable"
+    end
     local desired_arm_length = math.max(0.2,
-        source_reach * height_scale - shoulder_width * 0.5)
+        source_reach * height_scale - fitted_width * 0.5)
     local forward_required = 0
     local forward_count = 0
     -- Calibration schema 4 no longer captures an arms-forward pose; only
@@ -9106,8 +9194,9 @@ function presentation.apply_calibrated_arm_length(world, unit)
     -- both arm bones produced visibly stretched 1.25x limbs. Retain a narrow
     -- safety range around the authored proportions and let the live shoulder
     -- solver absorb forward reach before the two-bone arm solve.
-    local residual = math.max(0.90, math.min(1.10,
-        desired_arm_length / current_arm_length))
+    -- A narrowed avatar's arms may shorten further, down to NARROWED_ARM_MIN.
+    local residual = math.max(narrowed and presentation.NARROWED_ARM_MIN or 0.90,
+        math.min(1.10, desired_arm_length / current_arm_length))
     local scaled_nodes = {}
     for _, record in pairs(names) do
         for i = 2, 3 do
@@ -9117,6 +9206,14 @@ function presentation.apply_calibrated_arm_length(world, unit)
                 authored = Vector3Box(Unit.local_position(unit, node))
             }
         end
+    end
+    -- The shoulder joints, moved in along their collarbones.
+    for _, node in ipairs(narrowed or {}) do
+        scaled_nodes[#scaled_nodes + 1] = {
+            node = node,
+            authored = Vector3Box(Unit.local_position(unit, node)),
+            factor = narrow_factor
+        }
     end
     cache = {
         unit = unit,
@@ -9130,16 +9227,22 @@ function presentation.apply_calibrated_arm_length(world, unit)
         nodes = scaled_nodes
     }
     controller_observation.body_calibration_retarget = cache
-    mod:info(
-        "DARKTIDEVR_CALIBRATION retarget source_reach_m=%.4f forward_required_m=%.4f current_arm_m=%.4f desired_arm_m=%.4f shoulder_width_m=%.4f height_scale=%.4f arm_bone_scale=%.4f",
-        source_reach, forward_required,
-        current_arm_length, desired_arm_length,
-        shoulder_width, height_scale, residual)
     for _, record in pairs(cache.nodes) do
         Unit.set_local_position(unit, record.node,
-            record.authored:unbox() * residual)
+            record.authored:unbox() * (record.factor or residual))
     end
     World.update_unit_and_children(world, unit)
+    -- The shoulder width the skeleton now has, measured after the writes.
+    local applied_width = presentation.vector_distance(
+        position(names.left[1]), position(names.right[1]))
+    mod:info(
+        "DARKTIDEVR_CALIBRATION retarget source_reach_m=%.4f forward_required_m=%.4f current_arm_m=%.4f desired_arm_m=%.4f shoulder_width_m=%.4f height_scale=%.4f arm_bone_scale=%.4f shoulder_target_m=%s shoulder_scale=%s shoulder_applied_m=%.4f narrow=%s",
+        source_reach, forward_required,
+        current_arm_length, desired_arm_length,
+        shoulder_width, height_scale, residual,
+        target_width and string.format("%.4f", target_width) or "nil",
+        narrow_factor and string.format("%.4f", narrow_factor) or "nil",
+        applied_width, narrow_reason)
     return true, residual, cache.reason
 end
 

@@ -366,7 +366,8 @@ for frame=0,60 do
         assert(not api.on_start(server,server._action_settings,clock),'online route owned a server attack')
         assert(not api.update_sweep(server,1/52,clock,0,server._action_settings) and server._action_sweep_component.sweep_state==nil,
             'online route replaced or blocked the stock sweep')
-        assert(api.before_hit(server,{})==nil,'online route filtered a stock hit')
+        assert(api.before_hit(server,{},'head')==nil,'online route filtered a stock hit')
+        api.on_finish(server,clock+.4)
         component.current_action_name='none'
     end
 end
@@ -376,6 +377,10 @@ assert(stock.push,'online route took the trigger from a held block (push)')
 assert(stock_cancels==0,'online route cancelled a server action')
 assert(table.concat(logged,'\n'):find('authority=stock',1,true),'stock authority not reported')
 assert(table.concat(logged,'\n'):find('trigger=swing',1,true),'online trigger mode not reported')
+-- Each stock attack reports whether it landed, so unregistered presses show.
+local outcome=table.concat(logged,'\n'):match('event=attack_outcome[^\n]*')
+assert(outcome and outcome:find('targets=1',1,true) and outcome:find('hits=1',1,true) and outcome:find('zones=head',1,true),
+    'stock attack outcome not logged: '..tostring(outcome))
 -- The Psykhanium runs the online route too while its online combat rules
 -- are on, so what is practised there is what missions run.
 api.stop('fixture_range_stock')
@@ -395,7 +400,10 @@ idle(7001)
 local text=table.concat(logged,'\n')
 assert(text:find('event=started',1,true) and text:find('authority=stock',1,true) and not text:find('authority=physical',1,true),
     'Psykhanium with online rules did not run the online melee route')
-assert(not api.active() and api.world_grip('right')==nil,'Psykhanium online route rendered the physical weapon')
+-- The tracked weapon stays shown on the online route too: stock attack
+-- animations never replace the VR hand (user, 22 October).
+assert(api.active() and api.world_grip('right')~=nil,'online route let a stock animation replace the VR hand')
+assert(api.world_grip('left')==nil,'online route moved the off hand off its live controller pose')
 assert(not api.support_request(unit,true),'Psykhanium online route claimed the support grip')
 -- Option off: the local physical prototype.
 presentation.online_rules={enabled=function() return false end}

@@ -83,6 +83,90 @@ for _,sign in ipairs({1,-1}) do
         assert(y and p>=-math.pi/2-1e-12 and p<=math.pi/2+1e-12,swing.name..' solved an upside-down aim')
     end
 end
+-- The textbook upright flip is the same rotation only in one Euler
+-- composition. In another (here roll about up after pitch) it turned the aim
+-- 150-177 degrees off the target; the result is checked through the frame and
+-- laid through the target again (PC run fastR, 22 October: ogryn club lights
+-- aimed 45-67 degrees over the enemy's head on every other swing).
+do
+    local frame=function(y,p,r,v) return rotate(mul(mul(axis(3,y),axis(1,p)),axis(3,r)),v) end
+    local center={.05,1.78,-.12}
+    for _,target in ipairs({{-.8,1.4,-1.2},{0,1.4,-1.2},{.8,1.4,-1.2},{-.8,1.4,-.6}}) do
+        local points={{-.5,1.0,-.6},{0,1.05,-.62},{.5,1.0,-.6}}
+        local y,p,r=Aim.solve({0,0,0},points,{-.68,-.30,-.39},frame,target,center)
+        assert(y and p>=-math.pi/2-1e-12 and p<=math.pi/2+1e-12,'repaired aim left the stock pitch range')
+        local w=frame(y,p,r or 0,center)
+        assert(Aim.error(y,p,r,frame,unit(target),center)<=Aim.TOLERANCE,
+            'a flipped aim missed its target: '..math.deg(Aim.error(y,p,r,frame,unit(target),center)))
+        assert(dot(unit(w),unit(target))>math.cos(Aim.TOLERANCE))
+    end
+end
+-- The attack's point lands on the target whatever the engine's Euler form: a
+-- pitch of the other sign, or a roll that couples pitch into yaw, where the
+-- old one-axis steps diverged (PC overnight battery, 22 October: ogryn
+-- pickaxe, hammer and power maul aims 5-80 degrees off).
+do
+    local engines={
+        neg_pitch=function(y,p,r,v) return rotate(mul(mul(axis(3,y),axis(1,-p)),axis(2,r)),v) end,
+        roll_up=function(y,p,r,v) return rotate(mul(mul(axis(3,y),axis(1,p)),axis(3,r)),v) end,
+        reference=engine(1)}
+    for name,frame in pairs(engines) do
+        for _,s in ipairs({1,-1}) do for _,tz in ipairs({-1.2,-.6,0,.6}) do for _,tx in ipairs({-.8,0,.8}) do
+            local target={tx,1.4,tz}
+            local points={{.5*s,1.0,-.6},{0,1.05,-.62},{-.5*s,1.0,-.6}}
+            local y,p,r=Aim.solve({0,0,0},points,{-.68,-.30,-.39},frame,target,{.05,1.78,-.12})
+            assert(y and p>=-math.pi/2-1e-12 and p<=math.pi/2+1e-12,name..': aim left the stock pitch range')
+            local miss=Aim.error(y,p,r,frame,unit(target),{.05,1.78,-.12})
+            assert(miss<=Aim.TOLERANCE,string.format('%s: aim landed %.1f deg off (s=%d tx=%.1f tz=%.1f)',name,math.deg(miss),s,tx,tz))
+        end end end
+    end
+end
+-- The game's own composition of the input orientation: yaw, then roll, then
+-- pitch (roll before pitch). Measured on PC (run fastZ, 22 October): the view
+-- the stock sweep was laid from, for three latched inputs.
+do
+    local game=function(y,p,r,v) return rotate(mul(mul(axis(3,y),axis(2,r)),axis(1,p)),v) end
+    for _,seen in ipairs({{1.78,.47,3.08,1.75,-.47},{1.75,-.77,4.24,1.04,.32},{3.22,1.08,1.38,2.15,.17}}) do
+        local f=game(seen[1],seen[2],seen[3],{0,1,0})
+        assert(math.abs(math.atan2(-f[1],f[2])-seen[4])<.02 and math.abs(math.asin(f[3])-seen[5])<.02,
+            'the game composition model no longer matches the measured view')
+    end
+    -- Under it a roll near 90 degrees barely lets the view tilt: an overhead
+    -- chop laid along a sideways swing cannot look down at a low enemy. The
+    -- nearest roll that reaches it is used, so every attack meets its target.
+    local shapes={{{.05,0,-.95},{0,1.9,-.49}},{{-.68,-.30,-.39},{.05,1.78,-.12}},{{-.95,0,-.1},{-.1,1.8,-.34}}}
+    for _,shape in ipairs(shapes) do
+        for _,s in ipairs({1,-1}) do for _,tz in ipairs({-1.2,-.9,-.6,0,.6}) do for _,tx in ipairs({-.8,0,.8}) do
+            local target={tx,1.6,tz}
+            local points={{.5*s,1.0,-.6},{0,1.05,-.62},{-.5*s,1.0,-.6}}
+            local y,p,r=Aim.solve({0,0,0},points,shape[1],game,target,shape[2])
+            assert(y and p>=-math.pi/2-1e-12 and p<=math.pi/2+1e-12,'aim left the stock pitch range')
+            local miss=Aim.error(y,p,r,game,unit(target),shape[2])
+            assert(miss<=Aim.TOLERANCE,string.format('game composition: aim landed %.1f deg off',math.deg(miss)))
+        end end end
+    end
+end
+-- A heavy keeps the wrist's roll: it is turned so its own point (else the
+-- view centre) meets the target at that roll, in the game's composition,
+-- where plain pointing with a rolled wrist aims beside a low enemy.
+do
+    local game=function(y,p,r,v) return rotate(mul(mul(axis(3,y),axis(2,r)),axis(1,p)),v) end
+    for _,wrist in ipairs({0,.6,-.9,2.5}) do
+        for _,target in ipairs({{0,1.4,-1.0},{.6,1.2,-.4},{-.5,1.6,.3}}) do
+            for _,center in ipairs({{.1,1.6,-.4},false}) do
+                local y,p,sent=Aim.point({0,0,0},target,game,center or nil,wrist)
+                assert(y and p>=-math.pi/2-1e-12 and p<=math.pi/2+1e-12,'heavy aim left the stock pitch range')
+                local miss=Aim.error(y,p,sent or wrist,game,unit(target),center or {0,1,0})
+                assert(miss<=Aim.TOLERANCE,string.format('heavy at wrist roll %.1f aimed %.1f deg off',wrist,math.deg(miss)))
+            end
+        end
+    end
+    -- Plain pointing (the old heavy aim) misses with the wrist rolled.
+    local target={0,1.4,-1.0}
+    local f=target; local n=norm(f)
+    local py,pp=math.atan2(-f[1],f[2]),math.asin(f[3]/n)
+    assert(Aim.error(py,pp,.6,game,unit(target),{0,1,0})>math.rad(10),'fixture does not show the rolled-wrist error')
+end
 -- Unaligned results keep the wrist's roll, never a guess.
 do
     local frame=engine(1)
@@ -154,19 +238,19 @@ local function drive(options)
     local emitted,cancels,commits={},0,{}
     local runtime=Runtime.new(deps,{source='synthetic',owner=owner,strokes=Strokes.new(),extension=extension,weapon=weapon,
         slot='slot_primary',unit={},defaults={sweep_width_mod=1,sweep_height_mod=1,sweep_range_mod=1},authority='stock',
-        cancel_on_adopt=true,to_world=function(pose) return pose.position,pose.rotation end,
+        cancel_on_adopt=true,to_world=options.to_world or function(pose) return pose.position,pose.rotation end,
         cancel_native=function() cancels=cancels+1 end,
-        on_commit=function(data) commits[#commits+1]=data end,contact=options.contact,
+        on_commit=function(data) commits[#commits+1]=data end,contact=options.contact,trigger=options.trigger,
         emit=function(kind,data) emitted[kind]=(emitted[kind] or 0)+1;emitted[kind..'_data']=data end})
     local reference,pressed={},0
     emitted.press_frames={}
-    for frame=0,60 do
+    for frame=0,options.frames or 60 do
         local elapsed=frame/52
         if options.before then options.before(10+elapsed) end
         local sample=Replay.sample(keys,elapsed)
         local current=assert(runtime.sample({source='synthetic',active=true,tracking_valid=true,reference=reference,
             frame=frame,time=10+elapsed,pose_time=elapsed,dominant=sample.right,support=sample.left,
-            support_held=false,intent=true,guarding=false}))
+            support_held=false,intent=true,guarding=false,walk_speed=options.walk}))
         local edge=runtime.inputs(frame)
         if edge.pressed then pressed=pressed+1;emitted.press_frames[#emitted.press_frames+1]=frame end
         if current.stroke.committed then
@@ -192,6 +276,17 @@ do
         'an idle swing did not press the stock light attack')
     assert(#commits==1 and commits[1].action=='light' and #commits[1].points>=2 and pressed==1)
     assert(not emitted.trajectory_selected and not emitted.interrupt,'stock route selected or interrupted an attack')
+    -- The same swing while the character runs at 4 m/s (PC run moveA, 24
+    -- October): the aim's stroke path is the hand's relative to the character,
+    -- so the locomotion since the onset is not in it.
+    local body=0
+    component.current_action_name='none'; component.start_t=10; queued=nil
+    local _,moving=drive({before=function(t) body=4*(t-10) end,
+        to_world=function(pose) return {pose.position[1],pose.position[2]+body,pose.position[3]},pose.rotation end})
+    local function swing(points) local a,b=points[1],points[#points]; return {b[1]-a[1],b[2]-a[2],b[3]-a[3]} end
+    local s,m=swing(commits[1].points),swing(moving[1].points)
+    assert(#moving==1 and #moving[1].points==#commits[1].points and math.abs(s[1]-m[1])<1e-6 and math.abs(s[2]-m[2])<1e-6 and
+        math.abs(s[3]-m[3])<1e-6,'the aim\'s stroke path carried the character\'s locomotion')
     -- A press waits while the parser still holds one.
     queued='start_attack'
     emitted,commits,pressed=drive({})
@@ -224,6 +319,40 @@ do
     assert(close(Contact.horizon(nil,nil,nil),.3),'unknown attack timing has no fallback')
     local path=assert(Contact.path(before,now,.05,.3))
     assert(#path==Contact.STEPS+1 and path[1]==now and close(path[#path].position[1],.7,1e-9))
+    -- A swing's way (user, 22 October: press when the swing is seen, at the
+    -- first enemy on its way): at least WAY ahead, sliced no coarser than
+    -- STEP_SECONDS, so a longer way skips no thin target.
+    assert(Contact.way(.25)==Contact.WAY and Contact.way(.5)==.5 and Contact.way(nil)==Contact.WAY,'swing way not extended')
+    path=assert(Contact.path(before,now,.05,Contact.WAY))
+    assert(#path==math.ceil(Contact.WAY/Contact.STEP_SECONDS-1e-9)+1 and close(path[#path].position[1],.1+.1*Contact.WAY/.05,1e-9),
+        'long way not sliced finely')
+    assert(#Contact.path(before,now,.05,Contact.MAX_HORIZON)==Contact.MAX_STEPS+1,'way slices not capped')
+    -- The hand's motion carries the weapon as it is held now: a heavy head
+    -- trailing the hand keeps its lag along the way and is not spun further
+    -- by it (PC run fastE: a trailing maul's path turned away from its enemy).
+    local hand_before={position={0,0,1},rotation=rot_z(0)}
+    local hand_now={position={.1,0,1},rotation=rot_z(0)}
+    local held={position={.1,.05,1},rotation=rot_z(-.3)}
+    path=assert(Contact.path(hand_before,hand_now,.05,.3,held))
+    assert(path[1]==held and #path==Contact.STEPS+1,'carried path does not start at the drawn weapon')
+    local last=path[#path]
+    assert(close(last.position[1],.7,1e-9) and close(last.position[2],.05,1e-9) and close(last.position[3],1,1e-9),
+        'weapon not carried along the hand\'s way')
+    expect=rot_z(-.3)
+    d=0; for i=1,4 do d=d+last.rotation[i]*expect[i] end
+    assert(math.abs(d)>1-1e-9,'the weapon\'s lag was not kept along its way')
+    -- Its own lag spin (from -.1 to -.3 rad in 50 ms) would have turned it 1.2 rad more.
+    local spun=assert(Contact.path({position={0,.05,1},rotation=rot_z(-.1)},held,.05,.3))[Contact.STEPS+1]
+    d=0; for i=1,4 do d=d+spun.rotation[i]*expect[i] end
+    assert(math.abs(d)<.9,'fixture does not show the lag spin it guards against')
+    hand_now.rotation=rot_z(.4)
+    path=assert(Contact.path(hand_before,hand_now,.05,.3,held))
+    last=path[#path]
+    -- Hand turned on to 7 x .4 rad; the weapon keeps its -.7 rad from the hand's .4.
+    expect=rot_z(.4*7-.4-.3)
+    d=0; for i=1,4 do d=d+last.rotation[i]*expect[i] end
+    assert(math.abs(d)>1-1e-9,'the hand\'s own turn did not carry the weapon')
+    assert(Contact.path(hand_before,hand_now,.05,.3,{position={0/0,0,0},rotation=rot_z(0)})==nil,'a broken held pose was carried')
     -- Engine adapter: the first enemy hit zone over the poses, skipping allies,
     -- scenery without a hit zone, the attacker itself and dead units.
     local saved={Vector3=Vector3,Quaternion=Quaternion,Actor=Actor,ALIVE=ALIVE}
@@ -246,6 +375,16 @@ do
     assert(hit and hit.unit==units.enemy and hit.zone=='torso' and hit.step==2 and hit.position[3]==3,'enemy contact not found')
     queried=0;per_pose={{actors.ally},{actors.wall}}
     assert(Contact.query(context,{now,now})==nil,'an ally or scenery armed an attack')
+    -- A corpse still exists (ALIVE) but has no health (HEALTH_ALIVE): the
+    -- stock sweep ignores it, so it must not take the attack's aim (PC run
+    -- pcO, 22 October: a swing-released heavy aimed at a body on the floor).
+    local corpse={unit={},at={1,2,1}}
+    ALIVE[corpse.unit]=true
+    HEALTH_ALIVE={[units.self]=true,[units.enemy]=true}
+    queried=0;per_pose={{corpse},{actors.enemy}}
+    hit=Contact.query(context,{now,now})
+    assert(hit and hit.unit==units.enemy and hit.step==2,'a corpse took the attack\'s contact')
+    HEALTH_ALIVE=nil
     -- The probe box is anchored at the hand; only enemies inside the attack's
     -- own reach from the head count.
     local far={unit={},at={3.5,0,1.6}}
@@ -255,6 +394,45 @@ do
     hit=Contact.query(context,{now,now})
     assert(hit and hit.unit==units.enemy and hit.step==2,'an enemy beyond the attack reach armed it')
     assert(Contact.within({0,0,0},0)==nil and Contact.within({0,0,0},2)({0,0,2.1})==true and Contact.within({0,0,0},2)({0,0,2.2})==false)
+    -- Moving (user, 24 October: running swings registered far less often): the
+    -- reach is from where the head will be when the weapon gets there. Running
+    -- at 4 m/s, an enemy 3.5 m ahead is out of a 3 m reach now, in it at the
+    -- way's last pose 0.4 s on; backing away, one 2.9 m ahead leaves it.
+    local running=Contact.within({0,0,0},3,{velocity={4,0,0},horizon=.4,count=5})
+    assert(running({3.5,0,0},1)==false and running({3.5,0,0},5)==true,'the reach gate ignored the character running at the enemy')
+    assert(Contact.within({0,0,0},3,{velocity={-4,0,0},horizon=.4,count=5})({2.9,0,0},5)==false,'backing away kept the enemy in reach')
+    context.within=Contact.within({0,0,1.6},3,{velocity={4,0,0},horizon=.4,count=5})
+    queried=0;per_pose={{far},{},{},{},{far}}
+    hit=Contact.query(context,{now,now,now,now,now})
+    assert(hit and hit.unit==far.unit and hit.step==5,'running at an enemy: not out of reach now and in reach on arrival')
+    -- The aim's target where it will be relative to the head when the attack
+    -- lands: running at 5 m/s, 0.3 s on.
+    local eye={0,0,1.6}
+    local led,zones,shift=Contact.lead(eye,{2.5,0,1},{{2.5,0,1.5,zone='head'}},.3,{5,0,0})
+    assert(math.abs(led[1]-1)<1e-9 and math.abs(zones[1][1]-1)<1e-9 and zones[1][3]==1.5 and zones[1].zone=='head' and
+        math.abs(shift[1]+1.5)<1e-9,'the attack was not led onto where the enemy will be')
+    -- Pressed late into an enemy 1.2 m away (moveA): led no closer than LEAD_MIN.
+    led=Contact.lead(eye,{1.2,0,1},nil,.4,{4,0,0})
+    assert(math.abs(led[1]-Contact.LEAD_MIN)<1e-9,'a late press was led through the enemy: '..led[1])
+    assert(Contact.lead(eye,{.4,0,1},nil,.4,{4,0,0})[1]==.4,'an enemy already inside LEAD_MIN was moved closer')
+    led=Contact.lead(eye,{1.2,0,1},nil,.4,{-2,0,0})
+    assert(math.abs(led[1]-2)<1e-9,'backing away did not lead the target farther')
+    -- The lead's velocity is the recent mean (moveC: sliding against an enemy
+    -- flipped sideways frame to frame); a steady run keeps its speed.
+    local motion=Contact.motion()
+    for i=0,13 do motion.add(10+i/52,{0,i%2==0 and 4 or -4,0}) end
+    local mean=motion.velocity()
+    assert(math.abs(mean[2])<.5 and mean[1]==0,'a body sliding back and forth was led by its last frame')
+    for i=14,40 do motion.add(10+i/52,{4,0,0}) end
+    mean=motion.velocity()
+    assert(math.abs(mean[1]-4)<1e-9 and mean[2]==0,'a steady run did not lead by its speed')
+    motion.add(10+40/52,{0,0,0}); assert(motion.velocity()[1]==4,'a repeated frame was sampled twice')
+    motion.add(5,{1,0,0}); assert(motion.velocity()[1]==1,'a restarted clock kept old samples')
+    assert(Contact.motion().velocity()==nil,'an empty history gave a velocity')
+    local still={2,0,1}
+    assert(Contact.lead(eye,still,nil,.3,{0,0,0})==still and Contact.lead(eye,still,nil,nil,{4,0,0})==still and
+        Contact.lead(eye,still,nil,.3,nil)==still,
+        'a standing or undelayed attack was moved')
     context.within=nil
     for key,value in pairs(saved) do _G[key]=value end
 end
@@ -264,20 +442,104 @@ do
     component.current_action_name='none'; component.start_t=10; queued=nil
     local calls,seen=0,nil
     local emitted,commits,pressed=drive({contact=function(args)
-        calls=calls+1;seen=args
+        calls=calls+1;if #args.poses>1 then seen=args end
         if calls>=3 then return {zone='head',step=2,position={1,2,1.7}} end
     end})
     assert(emitted.gesture_armed==1 and emitted.gesture_contact==1 and not emitted.gesture_whiff,'contact stroke did not arm then press')
-    assert(pressed==1 and emitted.press_frames[1]>emitted.commit_frame,'attack pressed before its contact')
-    assert(#seen.poses==deps.Contact.STEPS+1 and seen.horizon>=deps.Contact.MIN_HORIZON,'look-ahead path missing')
+    -- An enemy found while the swing builds up presses as it qualifies.
+    assert(pressed==1 and emitted.press_frames[1]>=emitted.commit_frame,'attack pressed before its contact')
+    assert(#seen.poses>=deps.Contact.STEPS+1 and seen.horizon>=deps.Contact.WAY,'look-ahead path missing or short of the way')
     assert(#commits==1 and commits[1].target and commits[1].target[3]==1.7,'attack not aimed at the contact')
     emitted,commits,pressed=drive({contact=function() return nil end})
     assert(emitted.gesture_armed==1 and emitted.gesture_whiff==1 and pressed==0 and #commits==0,'a whiff sent an attack')
+    -- An enemy the swing reaches within its attack's press-to-damage time
+    -- presses on the frame the swing is seen.
+    emitted,commits,pressed=drive({contact=function() return {zone='torso',step=8,position={1,2,1.2}} end})
+    assert(pressed==1 and emitted.press_frames[1]==emitted.commit_frame,'a swing with an enemy on its way waited to press')
+    assert(#commits==1 and commits[1].target[3]==1.2)
+    assert(emitted.gesture_contact_data.ahead<=emitted.gesture_contact_data.delay+Runtime.PRESS_SLACK,'contact timing not reported')
+    -- One further along than that waits until it is as far off as the damage
+    -- (user, 23 October: damage landed before the weapon reached the enemy).
+    local far=0
+    emitted,commits,pressed=drive({contact=function(args)
+        if #args.poses<2 then return nil end
+        far=far+1
+        return {zone='torso',step=far<=4 and #args.poses or 2,position={1,2,1.2}}
+    end})
+    assert(emitted.gesture_wait==1 and emitted.gesture_wait_data.ahead>emitted.gesture_wait_data.delay,'a far contact did not wait')
+    assert(pressed==1 and emitted.press_frames[1]>emitted.commit_frame,'a far contact pressed before the weapon came within its damage time')
+    assert(emitted.gesture_contact_data.ahead<=emitted.gesture_contact_data.delay+Runtime.PRESS_SLACK,'pressed early')
+    -- The attack's box can touch an enemy well before the blade as drawn does
+    -- (pass 7, 23 October: a crowbar's box ran 0.4 s of swing ahead of it).
+    -- The press is timed by the blade when it reaches that enemy...
+    local foe,blade_calls={},0
+    emitted,commits,pressed=drive({contact=function(args)
+        if #args.poses<2 then return nil end
+        if not args.visual then return {unit=foe,zone='torso',step=1,position={1,2,1.2}} end
+        blade_calls=blade_calls+1
+        return {unit=foe,zone='torso',step=blade_calls<=4 and #args.poses or 2,position={1,2,1.2}}
+    end})
+    assert(emitted.gesture_wait==1 and emitted.gesture_wait_data.blade==true,'a box contact ahead of the blade did not wait for it')
+    assert(pressed==1 and emitted.press_frames[1]>emitted.commit_frame and emitted.gesture_contact_data.blade==true,
+        'the press was not timed by the blade')
+    -- ...and by the box when only the box reaches it.
+    emitted,commits,pressed=drive({contact=function(args)
+        if #args.poses<2 or args.visual then return nil end
+        return {unit=foe,zone='torso',step=1,position={1,2,1.2}}
+    end})
+    assert(pressed==1 and emitted.press_frames[1]==emitted.commit_frame and not emitted.gesture_wait and
+        emitted.gesture_contact_data.blade==false,'an enemy only the box reaches was not pressed at once')
+    -- A swing that never comes that close sends nothing, and gives up after
+    -- ARM_WAIT (shortened to fit this fixture's second of motion).
+    local wait=Runtime.ARM_WAIT;Runtime.ARM_WAIT=.3
+    emitted,commits,pressed=drive({contact=function(args)
+        if #args.poses>1 then return {zone='torso',step=#args.poses,position={1,2,1.2}} end
+    end})
+    Runtime.ARM_WAIT=wait
+    assert(pressed==0 and #commits==0 and emitted.gesture_wait==1 and emitted.gesture_whiff==1 and
+        emitted.gesture_whiff_data.reason=='never_arrived','a contact the swing never neared was pressed: '..pressed)
 end
--- The trigger only charges. Let go without a swing, the server's charge is
--- block-cancelled: the attack stays held while block is pressed, never a
--- release that the stock parser would turn into a light attack.
+-- A dual weapon's other blade is a second stock runtime on its own lease
+-- (user, 22 October: both hands swing). Physical authority owns actions and
+-- may never share the player this way.
 do
+    local unit,lease={},{}
+    local function build(extra)
+        local opts={source='synthetic',owner=assert(Pose.new(Inertia,{profile='knife',
+            library_path=root..'/build/melee-inertia/darktidevr_melee_inertia.dll'})),strokes=Strokes.new(),
+            extension=extension,weapon=weapon,slot='slot_primary',unit=unit,
+            defaults={sweep_width_mod=1,sweep_height_mod=1,sweep_range_mod=1},authority='stock',
+            to_world=function(pose) return pose.position,pose.rotation end,cancel_native=function() end}
+        for key,value in pairs(extra or {}) do opts[key]=value end
+        return opts
+    end
+    local main=Runtime.new(deps,build())
+    local off=Runtime.new(deps,build({lease=lease}))
+    assert(Runtime.owner(unit)==main and Runtime.owner(lease)==off,'the two hands did not each lease their own key')
+    local refused=build({lease={},authority='physical'})
+    assert(not pcall(Runtime.new,deps,refused),'a physical runtime took a second lease')
+    refused.owner.close()
+    off.close(); main.close()
+    assert(Runtime.owner(unit)==nil and Runtime.owner(lease)==nil,'a hand kept its lease after closing')
+end
+-- "Every swing" presses each stroke as it is seen, aimed at the first enemy
+-- on its way when there is one, else turned along the swing.
+do
+    component.current_action_name='none'; component.start_t=10; queued=nil
+    local emitted,commits,pressed=drive({trigger='swing',contact=function(args)
+        if #args.poses>1 then return {zone='head',step=3,position={1,2,1.6}} end
+    end})
+    assert(pressed==1 and emitted.press_frames[1]==emitted.commit_frame and not emitted.gesture_armed,'swing mode armed instead of pressing')
+    assert(emitted.gesture_contact==1 and #commits==1 and commits[1].target and commits[1].target[3]==1.6,
+        'swing mode not aimed at the first enemy on its way')
+    emitted,commits,pressed=drive({trigger='swing',contact=function() return nil end})
+    assert(pressed==1 and #commits==1 and commits[1].target==nil and not emitted.gesture_contact and not emitted.gesture_whiff,
+        'swing mode at nothing did not attack along the swing')
+end
+-- The stock trigger is the attack button (user, 22 October): it charges
+-- while held, letting go releases it for the server to fire (heavy once
+-- charged, light if tapped), and no block is ever pressed for it.
+local function trigger_run(held_until,frames,guard)
     component.current_action_name='none'; component.start_t=10; queued=nil
     local owner=assert(Pose.new(Inertia,{profile='hammer',library_path=root..'/build/melee-inertia/darktidevr_melee_inertia.dll'}))
     local emitted={}
@@ -286,19 +548,133 @@ do
         to_world=function(pose) return pose.position,pose.rotation end,cancel_native=function() error('stock cancelled') end,
         emit=function(kind) emitted[kind]=(emitted[kind] or 0)+1 end})
     local still=Replay.sample(keys,0)
-    local one,two={},{}
-    for frame=0,14 do
-        assert(runtime.sample({source='synthetic',active=true,tracking_valid=true,reference=two,frame=frame,time=20+frame/52,
-            pose_time=frame/52,dominant=still.right,support=still.left,intent=true,guarding=false,heavy_intent=frame>=1 and frame<=3}))
+    local one,two,reference={},{},{}
+    for frame=0,frames do
+        assert(runtime.sample({source='synthetic',active=true,tracking_valid=true,reference=reference,frame=frame,time=20+frame/52,
+            pose_time=frame/52,dominant=still.right,support=still.left,intent=true,guarding=guard and guard(frame) or false,
+            heavy_intent=frame>=1 and frame<=held_until}))
         one[frame]=runtime.inputs(frame); two[frame]=runtime.block_inputs(frame)
     end
     runtime.close()
-    assert(emitted.charge_start==1 and emitted.charge_cancel==1 and not emitted.stroke)
-    assert(one[1].pressed and one[1].held and one[3].held and not one[3].released,'trigger did not charge')
-    for frame=4,6 do assert(one[frame].held and not one[frame].released and not one[frame].pressed,'charge released before its block') end
-    assert(one[7].released and not one[7].held and not one[8].held,'charge not released after the block took it')
-    assert(two[4].pressed and two[4].held and two[9].held and not two[9].released,'no cancelling block')
-    assert(two[10].released and not two[10].held and not two[11].held and not two[11].pressed,'cancelling block not let go')
-    for frame=0,3 do assert(not two[frame].held,'block before the trigger was let go') end
+    if not guard then
+        for frame=0,frames do assert(not two[frame].held and not two[frame].pressed,'the trigger pressed block') end
+    end
+    return emitted,one
 end
-print('PASS: contact look-ahead (prediction, probe, arm/press/whiff), online trigger charge cancelled into block, online swing aim in both roll conventions, thrust/short/through-head refusals, per-swing latch, stock press route and buffer gate')
+do
+    local emitted,one=trigger_run(3,14)
+    assert(emitted.charge_start==1 and emitted.charge_release==1 and not emitted.charge_cancel and not emitted.stroke)
+    assert(one[1].pressed and one[1].held and one[3].held and not one[3].released,'trigger did not charge')
+    assert(one[4].released and not one[4].held and not one[5].held,'letting go did not release the charge')
+    -- Held past the server's auto-complete: the button stays held, as a held
+    -- stock attack button does; nothing cancels it.
+    emitted,one=trigger_run(150,150)
+    assert(emitted.charge_start==1 and not emitted.charge_cancel and not emitted.charge_release,'a long hold was cancelled')
+    for frame=1,150 do assert(one[frame].held and not one[frame].released,'a held trigger let go at frame '..frame) end
+    -- Block while charging keeps the charge held, so the server cancels it
+    -- (stock attack_cancel); a release there would fire it (review, 22 Oct).
+    emitted,one=trigger_run(20,26,function(frame) return frame>=8 and frame<=14 end)
+    assert(emitted.charge_start==1 and emitted.charge_release==1,'block during a charge released or restarted it')
+    for frame=1,20 do assert(one[frame].held and not one[frame].released,'block released the charge at frame '..frame) end
+    assert(one[21].released and not one[21].held,'letting go after the block did not release')
+end
+-- One swing seen as two strokes into the same enemy, before the server has
+-- started the first press, presses once (worn 22 October: one swing, two hits).
+do
+    local back=assert(Replay.parse(table.concat({
+        '# t left_xyz left_xyzw right_xyz right_xyzw primary block left_grip right_grip',
+        '0.00 -0.25 0.30 -0.35 0 0 0 1 -0.60 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0',
+        '0.20 -0.25 0.30 -0.35 0 0 0 1 -0.60 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0',
+        '0.40 -0.25 0.30 -0.35 0 0 0 1 0.40 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0',
+        '0.46 -0.25 0.30 -0.35 0 0 0 1 0.40 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0',
+        '0.64 -0.25 0.30 -0.35 0 0 0 1 -0.60 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0',
+        '1.20 -0.25 0.30 -0.35 0 0 0 1 -0.60 0.45 -0.30 -0.70710678 0 0 0.70710678 0 0 0 0'},'\n')))
+    local saved=keys;keys=back
+    local enemy={}
+    component.current_action_name='none'; component.start_t=10; queued=nil
+    local emitted,_,pressed=drive({contact=function() return {unit=enemy,zone='torso',step=1,position={0,1,1.5}} end})
+    keys=saved
+    assert(emitted.gesture_armed==2,'fixture did not produce two strokes: '..tostring(emitted.gesture_armed))
+    assert(pressed==1 and emitted.gesture_contact==1 and emitted.gesture_duplicate==1,
+        'one swing into one enemy pressed '..pressed..' attacks')
+    assert(emitted.weapon_reach==1 and emitted.weapon_reach_data.after_press=='0.000',
+        'the weapon reaching its pressed enemy was not reported')
+    -- Once the server has started the first press, a back-swing into the same
+    -- enemy is a new attack and presses (review, 22 October).
+    keys=back
+    component.current_action_name='none'; component.start_t=10; queued=nil
+    emitted,_,pressed=drive({contact=function() return {unit=enemy,zone='torso',step=1,position={0,1,1.5}} end,
+        before=function(t) if t>=10.42 then component.start_t=10.42 end end})
+    keys=saved
+    assert(emitted.gesture_armed==2 and pressed==2 and not emitted.gesture_duplicate,
+        'a back-swing after the first attack started was swallowed: '..pressed..' presses')
+    -- A press buffered behind a running attack is still guarded while that
+    -- attack runs; once it ends without starting the press (PC run valH2,
+    -- 23 October: an activated thunderhammer's hit ended its swing) the
+    -- press was dropped, and the retry swing presses.
+    local enemy_contact=function() return {unit=enemy,zone='torso',step=1,position={0,1,1.5}} end
+    keys=back
+    component.current_action_name='light'; component.start_t=9; queued=nil
+    emitted,_,pressed=drive({contact=enemy_contact})
+    keys=saved
+    assert(pressed==1 and emitted.gesture_duplicate==1,'a press behind a running attack was not guarded: '..pressed..' presses')
+    keys=back
+    component.current_action_name='light'; component.start_t=9; queued=nil
+    emitted,_,pressed=drive({contact=enemy_contact,before=function(t) if t>=10.3 then component.current_action_name='none' end end})
+    keys=saved
+    assert(pressed==2 and not emitted.gesture_duplicate,'a retry after a dropped press was refused: '..pressed..' presses')
+    component.current_action_name='none'; component.start_t=10
+end
+-- Walking with arm-pump locomotion (VR StrideS; user, 23 October: a jog read
+-- as slow swings). Slow strokes whose other hand swings the opposite way are
+-- strides while walking; fast ones always attack (user: sometimes you swing
+-- hard while walking); a real swing with the other hand still attacks.
+do
+    local function pump(amplitude,height,hertz)
+        local lines={'# grip=touch','# t left_xyz left_xyzw right_xyz right_xyzw primary block left_grip right_grip'}
+        for i=0,120 do
+            local t=i*.025
+            local p=math.sin(2*math.pi*hertz*t)
+            lines[#lines+1]=string.format('%.3f -0.25 %.4f %.4f 0.70710678 0 0 0.70710678 0.25 %.4f %.4f 0 0 0 1 0 0 0 0',
+                t,.3-amplitude*p,-.4-height*p,.3+amplitude*p,-.4+height*p)
+        end
+        return assert(Replay.parse(table.concat(lines,'\n')))
+    end
+    local foe={}
+    local function enemy(args) if #args.poses>1 then return {unit=foe,zone='torso',step=1,position={1,2,1.2}} end end
+    local saved=keys
+    local function run(fixture,walk)
+        keys=fixture
+        component.current_action_name='none'; component.start_t=10; queued=nil
+        local emitted,_,pressed=drive({contact=enemy,walk=walk,frames=150})
+        keys=saved
+        return emitted,pressed
+    end
+    local slow,hard=pump(.2,.08,1.4),pump(.3,.1,2.2)
+    -- Off by default (worn-8: too sensitive): the pumps attack, and each stroke
+    -- logs that the filter would have held it.
+    assert(Runtime.STRIDE_FILTER==false,'the stride filter is on by default')
+    local emitted,pressed=run(slow,1.6)
+    assert(pressed>=1 and not emitted.stroke_filtered and emitted.stroke_data.stride_match==true,
+        'the disabled stride filter held strokes or did not log the match: '..pressed)
+    Runtime.STRIDE_FILTER=true
+    emitted,pressed=run(slow,1.6)
+    assert(pressed==0 and (emitted.stroke_filtered or 0)>=1,'arm pumps while walking pressed attacks: '..pressed)
+    local filtered=emitted.stroke_filtered_data
+    assert(tonumber(filtered.walk)>=1.5 and tonumber(filtered.cos)<=-.5 and tonumber(filtered.hand)<Runtime.STRIDE_FAST,
+        'stride inputs not logged')
+    emitted,pressed=run(slow,0)
+    assert(pressed>=1 and not emitted.stroke_filtered,'the pump fixture made no attacks standing still: it proves nothing')
+    assert(emitted.stroke_data.walk=='0.00' and emitted.stroke_data.cos~=nil,'stroke motion not logged')
+    -- A hard stroke commits while its hand still speeds up: held as a stride,
+    -- it attacks as soon as the hand passes STRIDE_FAST.
+    emitted,pressed=run(hard,1.6)
+    assert(pressed>=3 and (emitted.stroke_released or 0)>=1 and tonumber(emitted.stroke_released_data.hand)>=Runtime.STRIDE_FAST,
+        'fast swings while walking were filtered as strides: '..pressed..' presses')
+    -- The default fixture's real swing, with the support hand still, while walking.
+    component.current_action_name='none'; component.start_t=10; queued=nil
+    emitted,_,pressed=drive({contact=enemy,walk=1.6})
+    assert(pressed==1 and not emitted.stroke_filtered,'a real swing while walking was filtered')
+    Runtime.STRIDE_FILTER=false
+end
+print('PASS: contact look-ahead (prediction, probe, swing way, arm/press/whiff, press on sight, moving reach and lead), swing mode aimed at the first enemy, online trigger is the attack button (release on let-go, held past auto-complete), duplicate press guard, stride filter (off by default, logged), online swing aim in both roll conventions, thrust/short/through-head refusals, per-swing latch, stock press route and buffer gate')

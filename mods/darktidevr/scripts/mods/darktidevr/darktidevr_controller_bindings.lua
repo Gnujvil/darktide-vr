@@ -262,6 +262,8 @@ function Bindings.install(mod)
     local stick_held, stick_active = 0, false
     local stick_rearm = false
     local stick_generation
+    local auto_sprinting, auto_sprint_armed, auto_sprint_generation = false, false, nil
+    local auto_sprint_release = false
     for _,action in ipairs(Bindings.actions) do
         masks[action.id] = action.mask
         if action.pressed or action.held or action.released then
@@ -385,10 +387,44 @@ function Bindings.install(mod)
     -- Action mask the gestures hold this frame, over and above the bindings.
     -- Gestures OR into it; every sample consumes and clears it.
     api.forced = 0
+    -- Reach full normal movement at 80% without changing direction or letting
+    -- diagonals exceed unit magnitude. Sprint still samples the original axes.
+    function api.scale_movement(x, y)
+        local divisor = math.max(0.8, math.sqrt(x*x + y*y))
+        return x/divisor, y/divisor
+    end
+    -- VR StrideS supplies ordinary movement axes. Use radial magnitude so
+    -- diagonals have the same threshold: start at 90%, release below 80%.
+    -- Sample on fixed frames so even a one-frame release reaches simulation.
+    function api.sample_auto_sprint(enabled, x, y, generation)
+        local valid = enabled == true and type(x) == "number" and type(y) == "number" and
+            x >= -1 and x <= 1 and y >= -1 and y <= 1
+        local was_sprinting = auto_sprinting or auto_sprint_release
+        if not valid or generation ~= auto_sprint_generation then
+            auto_sprinting, auto_sprint_armed = false, false
+            -- Cancellation may happen between fixed frames. Deliver its stop
+            -- on the next locomotion frame before a held stick can rearm.
+            auto_sprint_release = was_sprinting
+        end
+        auto_sprint_generation = generation
+        if not valid then return false, false end
+        local magnitude_squared = x*x + y*y
+        if magnitude_squared < 0.8*0.8 then
+            auto_sprinting, auto_sprint_armed = false, true
+        -- Native axes are float32: their representation of 0.9 is just below
+        -- Lua's double-precision 0.9. Include that rounding at the threshold.
+        elseif auto_sprint_armed and magnitude_squared >= 0.9*0.9 - 1e-7 then
+            auto_sprinting = true
+        end
+        -- Keep ownership for the release frame, including with toggle sprint.
+        auto_sprint_release = false
+        return auto_sprinting, auto_sprinting or was_sprinting
+    end
     function api.sample(enabled, physical, stick_x, stick_y, stick_usable, generation, mode, support, exclusive_stick)
         api.prepare_context(mode)
         local reset_grip=dirty or enabled~=true or not active or
             generation~=stick_generation
+        if reset_grip then api.sample_auto_sprint(false, nil, nil, generation) end
         local grip=api.support_grip
         grip.held,grip.pressed,grip.released,grip.cancelled=false,false,false,false
         -- The eleven native channels occupy bits 0..10. Directional channels

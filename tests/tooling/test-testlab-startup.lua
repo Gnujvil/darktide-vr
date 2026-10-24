@@ -30,4 +30,16 @@ assert(not Startup.character(disabled,view,input,{},2))
 assert(not Startup.character(disabled,view,blocked,{},4))
 assert(not Startup.character(disabled,view,input,{},5))
 assert(Startup.character(disabled,view,input,{},6))
-print('testlab_startup=pass stock_gates settle named_character popup null_service one_shot')
+-- archetype:<name> selects the first character of that class.
+local picked
+view={_widgets_by_name=view._widgets_by_name,
+    _character_list_widgets={{content={profile={name='Zealot',archetype={name='zealot'}}}},
+        {content={profile={name='Big',archetype={name='ogryn'}}}}},
+    _on_character_widget_selected=function(_,index) picked=index end}
+local by_class={armed=true,character='archetype:ogryn'}
+assert(not Startup.character(by_class,view,input,{},10))
+assert(not Startup.character(by_class,view,input,{},11) and picked==2,'archetype did not select the ogryn')
+local no_class={armed=true,character='archetype:psyker'}
+assert(not Startup.character(no_class,view,input,{},20))
+assert(not Startup.character(no_class,view,input,{},21) and no_class.failed=='character_not_found')
+print('testlab_startup=pass stock_gates settle named_character archetype popup null_service one_shot')

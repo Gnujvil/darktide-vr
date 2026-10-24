@@ -396,6 +396,9 @@ if(BUILD_TESTING)
   add_test(NAME tracked_eye_anchor COMMAND "${LUAJIT_VALIDATOR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test-tracked-eye-anchor.lua"
     "${PROJECT_SOURCE_DIR}/mods/darktidevr/scripts/mods/darktidevr/darktidevr.lua")
+  add_test(NAME character_proportions COMMAND "${LUAJIT_VALIDATOR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test-character-proportions.lua"
+    "${PROJECT_SOURCE_DIR}/mods/darktidevr/scripts/mods/darktidevr/darktidevr.lua")
   add_test(NAME frame_profile COMMAND "${LUAJIT_VALIDATOR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test-frame-profile.lua"
     "${PROJECT_SOURCE_DIR}/mods/darktidevr/scripts/mods/darktidevr/darktidevr_frame_profile.lua"
@@ -515,6 +518,24 @@ if(BUILD_TESTING)
     "${PROJECT_SOURCE_DIR}/mods/darktidevr/scripts/mods/darktidevr/darktidevr_menu_prompts.lua")
   add_test(NAME testlab_manual_combat COMMAND "${LUAJIT_VALIDATOR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test-testlab-combat.lua" "${PROJECT_SOURCE_DIR}")
+  add_test(NAME testlab_damage_ledger COMMAND "${LUAJIT_VALIDATOR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test-testlab-damage-ledger.lua"
+    "${PROJECT_SOURCE_DIR}/mods/darktide_testlab/scripts/mods/darktide_testlab/damage_ledger.lua"
+    "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/testlab-damage-ledger.tsv")
+  add_test(NAME testlab_ranged_sweep COMMAND "${LUAJIT_VALIDATOR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test-testlab-ranged-sweep.lua"
+    "${PROJECT_SOURCE_DIR}/mods/darktide_testlab/scripts/mods/darktide_testlab")
+  add_test(NAME testlab_scenarios COMMAND "${LUAJIT_VALIDATOR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test-testlab-scenarios.lua" "${PROJECT_SOURCE_DIR}/mods/darktide_testlab")
+  add_test(NAME testlab_tooling_contract COMMAND "${LUAJIT_VALIDATOR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test-testlab-tooling-contract.lua" "${PROJECT_SOURCE_DIR}")
+  add_test(NAME testlab_anchor COMMAND "${LUAJIT_VALIDATOR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test-testlab-anchor.lua"
+    "${PROJECT_SOURCE_DIR}/mods/darktide_testlab/scripts/mods/darktide_testlab/anchor.lua")
+  add_test(NAME testlab_light_settings COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File
+    "${CMAKE_CURRENT_SOURCE_DIR}/test-testlab-light-settings.ps1")
+  add_test(NAME testlab_integration COMMAND "${LUAJIT_VALIDATOR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/test-testlab-integration.lua" "${PROJECT_SOURCE_DIR}/mods/darktide_testlab")
   add_test(NAME melee_simulation COMMAND "${LUAJIT_VALIDATOR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/test-melee-simulation.lua"
     "${PROJECT_SOURCE_DIR}/mods/darktidevr/scripts/mods/darktidevr/darktidevr_melee_simulation.lua"

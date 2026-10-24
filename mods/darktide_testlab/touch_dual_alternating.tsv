@@ -1,0 +1,17 @@
+# grip=touch
+# Dual weapons (dual shivs): four 0.9 m swings in 0.4 s across the target ahead,
+# alternating hands (right, left, right, left), 1.5 s apart, the resting hand
+# still. Each hand's swing should press one attack, its own aim and contact.
+# Run:  run touch_dual_alternating.tsv auto gesture   (stroke intent_hand=off on the left swings)
+# t left_xyz left_xyzw right_xyz right_xyzw primary block left_grip right_grip special
+0.000 -0.30 0.45 -0.30 0 0 0 1 0.30 0.45 -0.30 0 0 0 1 0 0 0 0 0
+0.400 -0.60 0.45 -0.30 0 0 0 1 0.60 0.45 -0.30 0 0 0 1 0 0 0 0 0
+0.800 -0.60 0.45 -0.30 0 0 0 1 0.60 0.45 -0.30 0 0 0 1 0 0 0 0 0
+1.200 -0.60 0.45 -0.30 0 0 0 1 -0.30 0.45 -0.30 0 0 0 1 0 0 0 0 0
+2.700 -0.60 0.45 -0.30 0 0 0 1 -0.30 0.45 -0.30 0 0 0 1 0 0 0 0 0
+3.100 0.30 0.45 -0.30 0 0 0 1 -0.30 0.45 -0.30 0 0 0 1 0 0 0 0 0
+4.600 0.30 0.45 -0.30 0 0 0 1 -0.30 0.45 -0.30 0 0 0 1 0 0 0 0 0
+5.000 0.30 0.45 -0.30 0 0 0 1 0.60 0.45 -0.30 0 0 0 1 0 0 0 0 0
+6.500 0.30 0.45 -0.30 0 0 0 1 0.60 0.45 -0.30 0 0 0 1 0 0 0 0 0
+6.900 -0.60 0.45 -0.30 0 0 0 1 0.60 0.45 -0.30 0 0 0 1 0 0 0 0 0
+8.400 -0.60 0.45 -0.30 0 0 0 1 0.60 0.45 -0.30 0 0 0 1 0 0 0 0 0

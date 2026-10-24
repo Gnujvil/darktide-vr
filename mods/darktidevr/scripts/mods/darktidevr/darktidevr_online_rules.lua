@@ -282,6 +282,9 @@ function Rules.install(mod, presentation, state, mode_name)
                 difficulty_evidence("get_resistance"))
         end
     end
+    -- The wrist roll a melee attack without a swing roll is sent with
+    -- (held while an action runs), or nil.
+    function instance.melee_wrist_roll() return wrist.roll end
     function instance.capture(handler, frame, dt, t)
         local ok, message = pcall(capture, handler, frame, dt, t)
         if not ok then

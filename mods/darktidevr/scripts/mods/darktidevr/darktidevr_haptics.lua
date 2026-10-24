@@ -104,6 +104,8 @@ Haptics.SPECIAL_HUM_INTERVAL = 0.25
 Haptics.WARNING_SHARE = 0.75
 Haptics.CRITICAL_SHARE = 0.9
 Haptics.LIGHT_MELEE_SCALE = 0.7
+-- After a contact pulse, the seconds its attack's damage effects stay quiet.
+Haptics.CONTACT_HOLD = 0.45
 Haptics.MISSED_PUSH_SCALE = 0.5
 Haptics.LOW_HEALTH_SHARE = 0.25
 Haptics.LOW_AMMO_SHARE = 0.2
@@ -415,8 +417,21 @@ function Haptics.install(mod, presentation, send)
         local dominant = roles and roles.physical("dominant")
         return (dominant == "left" or dominant == "right") and dominant or nil
     end
+    -- Online melee (user, 22 October): the hit is felt when the visible
+    -- weapon reaches the enemy, not a wind-up later when the server's damage
+    -- lands. That attack's own hit effects then do not pulse a second time.
+    function api.melee_contact(heavy)
+        local hands = melee_hands()
+        if hands and api.pulse(hands, "melee_hit", nil, heavy and 1 or Haptics.LIGHT_MELEE_SCALE) then
+            count("melee_contact")
+            local t = now()
+            api.contact_until = t and t + Haptics.CONTACT_HOLD or nil
+        end
+    end
     function api.melee_hit(action, damage_profile)
         if not local_action(action) then return end
+        local t = now()
+        if api.contact_until and t and t < api.contact_until then return end
         local heavy_strength = api.heavy_melee_strength
         local heavy = heavy_strength ~= nil and type(damage_profile) == "table" and
             damage_profile.melee_attack_strength == heavy_strength

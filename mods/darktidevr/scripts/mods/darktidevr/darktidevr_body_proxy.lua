@@ -821,6 +821,12 @@ end
 -- per-frame animation into the glove. key: the weapon template; without a key
 -- the live offset is used. Returns the offset to place the hand with.
 BodyProxy.GUN_HAND_SAMPLES=30
+-- The samples must be consecutive frames with the animated grip holding
+-- still: the tail of a draw or a fidget moves it, and a capture taken there
+-- holds a wrong (rolled) grip for the whole session (autogun, worn 22
+-- October). A frame more than this from the run's first one starts over,
+-- so a slow drift cannot creep in a little each frame (review, 22 October).
+BodyProxy.GUN_HAND_STILL_DEG,BodyProxy.GUN_HAND_STILL_M=1.5,.004
 BodyProxy.gun_hand_offsets={}
 -- The finger curl per weapon and side (animation audit item H), captured after
 -- this many steady frames and then held. The key is only valid on the frame
@@ -857,12 +863,25 @@ function BodyProxy.gun_hand_offset(key,steady,relative_position,relative_rotatio
     if not key then return relative_position,relative_rotation end
     local entry=BodyProxy.gun_hand_offsets[key]
     if entry and entry.position then return entry.position:unbox(),entry.rotation:unbox() end
-    if not steady then return relative_position,relative_rotation end
+    if not steady then
+        if entry then entry.samples=0;entry.x,entry.y,entry.z=0,0,0;entry.q={0,0,0,0};entry.anchor=nil end
+        return relative_position,relative_rotation
+    end
     if not entry then
         entry={samples=0,x=0,y=0,z=0,q={0,0,0,0}}
         BodyProxy.gun_hand_offsets[key]=entry
     end
     local qx,qy,qz,qw=Quaternion.to_elements(relative_rotation)
+    local px,py,pz=Vector3.x(relative_position),Vector3.y(relative_position),Vector3.z(relative_position)
+    local anchor=entry.anchor
+    if anchor then
+        local d=math.min(1,math.abs(qx*anchor[1]+qy*anchor[2]+qz*anchor[3]+qw*anchor[4]))
+        local moved=math.sqrt((px-anchor[5])^2+(py-anchor[6])^2+(pz-anchor[7])^2)
+        if math.deg(2*math.acos(d))>BodyProxy.GUN_HAND_STILL_DEG or moved>BodyProxy.GUN_HAND_STILL_M then
+            entry.samples=0;entry.x,entry.y,entry.z=0,0,0;entry.q={0,0,0,0};anchor=nil
+        end
+    end
+    entry.anchor=anchor or {qx,qy,qz,qw,px,py,pz}
     local q=entry.q
     if entry.samples>0 and qx*q[1]+qy*q[2]+qz*q[3]+qw*q[4]<0 then qx,qy,qz,qw=-qx,-qy,-qz,-qw end
     q[1],q[2],q[3],q[4]=q[1]+qx,q[2]+qy,q[3]+qz,q[4]+qw
@@ -875,8 +894,10 @@ function BodyProxy.gun_hand_offset(key,steady,relative_position,relative_rotatio
         local length=math.sqrt(q[1]*q[1]+q[2]*q[2]+q[3]*q[3]+q[4]*q[4])
         entry.position=Vector3Box(entry.x/n,entry.y/n,entry.z/n)
         entry.rotation=QuaternionBox(Quaternion.from_elements(q[1]/length,q[2]/length,q[3]/length,q[4]/length))
-        print(string.format('DARKTIDEVR_IK gun_hand_grip template=%s samples=%d offset=%.3f,%.3f,%.3f',
-            tostring(key),n,entry.x/n,entry.y/n,entry.z/n))
+        -- twist: the held grip's turn about the weapon's forward (local y)
+        -- axis, the roll a wrong capture shows as in the headset.
+        print(string.format('DARKTIDEVR_IK gun_hand_grip template=%s samples=%d offset=%.3f,%.3f,%.3f twist_deg=%.1f',
+            tostring(key),n,entry.x/n,entry.y/n,entry.z/n,math.deg(2*math.atan2((q[4]<0 and -q[2] or q[2])/length,math.abs(q[4])/length))))
         return entry.position:unbox(),entry.rotation:unbox()
     end
     return relative_position,relative_rotation

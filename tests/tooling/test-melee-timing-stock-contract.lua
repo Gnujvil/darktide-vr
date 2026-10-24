@@ -19,6 +19,7 @@ setfenv(settings_chunk,{settings=function(_,value) return value end})
 ActionHandlerSettings=settings_chunk()
 extract('local WIELD_ACTION_KINDS =','\nActionHandler._anim_event =')
 extract('ActionHandler._validate_single_chain_action =','\nActionHandler._valid_action_from_action_input =')
+extract('ActionHandler._validate_chain_action =','\nActionHandler._validate_single_chain_action =')
 local handling=1
 local buffs={attack_speed=1,melee_attack_speed=1,wield_speed=1}
 local target_available=true
@@ -82,4 +83,29 @@ assert(handler:_validate_single_chain_action(chain,100,1,1,actions,'context','re
 assert(not Timing.resolve(actions,{{action='light',input='start_attack'}},scale))
 chain.running_action_state_requirement=nil; target_available=false
 assert(not handler:_validate_single_chain_action(chain,100,1,1,actions,'context','recorded_input',nil))
+-- A list of chain alternatives (a toggle special's combo: its special windup
+-- while the special is on, the plain one otherwise; PC audit, 22 October)
+-- resolves to the alternative stock takes under the same conditions.
+do
+    target_available=true
+    actions.special_windup={kind='windup',allowed_chain_actions={light_attack={action_name='light',chain_time=0},
+        heavy_attack={action_name='heavy',chain_time=.5}}}
+    local alternatives={{action_name='special_windup',chain_time=.55},{action_name='windup',chain_time=.55}}
+    actions.light.allowed_chain_actions.start_attack=alternatives
+    local plain=handler._validate_action
+    for _,special in ipairs({false,true}) do
+        handler._validate_action=function(self,action,...)
+            if action==actions.special_windup then return special end
+            return plain(self,action,...)
+        end
+        local valid,selected=handler:_validate_chain_action(alternatives,100,1,1,actions,'context','recorded_input',nil)
+        local chain=Timing.chain(actions,'light','start_attack',nil,
+            function(target) return handler:_validate_action(target,'context',100,1,'recorded_input') end)
+        assert(valid and chain and chain.action_name==selected,'resolver took another chain alternative than stock')
+        assert(selected==(special and 'special_windup' or 'windup'))
+        cases=cases+1
+    end
+    handler._validate_action=plain
+    actions.light.allowed_chain_actions.start_attack={action_name='windup',chain_time=.55}
+end
 print('PASS: '..cases..' actual stock timing boundaries, additive buffs, handling, caps and conditional admission')

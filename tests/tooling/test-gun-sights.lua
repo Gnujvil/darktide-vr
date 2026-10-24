@@ -139,4 +139,67 @@ local along=d[1]*look[1]+d[2]*look[2]+d[3]*look[3]
 local miss_axis=math.sqrt((d[1]-along*look[1])^2+(d[2]-along*look[2])^2+(d[3]-along*look[3])^2)
 assert(miss_axis<.001,'tilted sight line misses the point by '..miss_axis)
 local o2=assert(Sights.offset({x=-.008,z=.032,axis=axis},{x=0,z=-.086})); near(o2.axis[3],math.sin(tilt),1e-9,'offset carries the axis')
-print('gun_sights=pass offset zeroing general_pose near cap ease foreign unknown eye_weight sight_axis')
+-- Eye measurement during stock ADS. Every way it can fail logs its reason
+-- once per gun: a worn shotgun session (23 October) aimed down the sights for
+-- seconds at a time and the eye never arrived, with nothing in the log.
+Quaternion.rotate=rot
+Quaternion.forward=function(q) return rot(q,{0,1,0}) end
+Vector3.distance=function(a,b) return math.sqrt((a[1]-b[1])^2+(a[2]-b[2])^2+(a[3]-b[3])^2) end
+local muzzle_1p,camera_unit={},{}
+local rig={muzzle={10,20,1.5},camera={10,19.5,1.565},node=7,fx_muzzle='fx_muzzle',first_person_mode=false}
+local extensions={
+    unit_data_system={read_component=function(_,name)
+        if name=='alternate_fire' then return {is_active=true} end
+        if name=='inventory' then return {wielded_slot='slot_secondary'} end
+    end},
+    weapon_system={weapon_template=function() return {name='shotgun_p4_m1',fx_sources={_muzzle=rig.fx_muzzle}} end},
+    visual_loadout_system={unit_and_node_from_node_name=function(_,slot,node)
+        if slot=='slot_secondary' and node=='fx_muzzle' and rig.node then return muzzle_1p,rig.node end
+    end},
+    first_person_system={first_person_unit=function() return camera_unit end,
+        is_in_first_person_mode=function() return rig.first_person_mode end}}
+ScriptUnit={has_extension=function(_,name) return extensions[name] end}
+Unit={world_pose=function(u) assert(u==muzzle_1p); return rig.muzzle end,
+    world_position=function(u) assert(u==camera_unit); return rig.camera end,
+    world_rotation=function() return identity end}
+local function measuring(eye_pose)
+    local measured_lines={}
+    local measured_api=Sights.install({info=function(_,f,...) measured_lines[#measured_lines+1]=string.format(f,...) end},
+        {gun_aim={is_gun=function() return true end},eye_pose=eye_pose})
+    return measured_api,measured_lines
+end
+local function count(list,text)
+    local n=0
+    for _,line in ipairs(list) do if line:find(text,1,true) then n=n+1 end end
+    return n
+end
+-- Stock ADS: the hidden rig's camera sits behind the sights.
+local m_api,m_lines=measuring()
+m_api.update(unit,0); m_api.update(unit,.5)
+assert(#m_lines==0 and not m_api.eyes.shotgun_p4_m1,'nothing before the ADS settles')
+m_api.update(unit,1)
+local eye=assert(m_api.eyes.shotgun_p4_m1,'stock ADS eye measured')
+near(eye.x,0,1e-9); near(eye.z,.065,1e-9); assert(eye.source=='measured')
+assert(count(m_lines,'eye template=shotgun_p4_m1 eye_in_muzzle=0.0000,0.0650')==1,'measured eye logged')
+-- The camera far from the sights (head-tracked camera, or a rig left in its
+-- hip pose): rejected, and the numbers that were rejected are logged once.
+rig.camera={10.2,19.6,1.82}
+m_api,m_lines=measuring(function() return {10.2,19.62,1.82},identity end)
+m_api.update(unit,0); m_api.update(unit,1); m_api.update(unit,1.1); m_api.update(unit,2)
+assert(not m_api.eyes.shotgun_p4_m1,'implausible eye not stored')
+assert(count(m_lines,'eye_skipped template=shotgun_p4_m1 reason=implausible')==1,'implausible eye logged once')
+local skipped=m_lines[1]
+assert(skipped:find('eye_in_muzzle=0.2000,-0.4000,0.3200',1,true),'rejected eye in the muzzle frame: '..skipped)
+assert(skipped:find('camera_to_muzzle_m=0.550',1,true),'camera to 1P muzzle distance: '..skipped)
+assert(skipped:find('tracked_eye_to_camera_m=0.020',1,true),'tracked eye to camera distance: '..skipped)
+assert(skipped:find('first_person_mode=false',1,true),'first-person equipment mode: '..skipped)
+-- No first-person muzzle node, no muzzle name: each its own reason.
+rig.camera={10,19.5,1.565}; rig.node=nil
+m_api,m_lines=measuring()
+m_api.update(unit,0); m_api.update(unit,1); m_api.update(unit,2)
+assert(count(m_lines,'eye_skipped template=shotgun_p4_m1 reason=no_muzzle_node')==1,'missing 1P muzzle node logged once')
+rig.node=7; rig.fx_muzzle=nil
+m_api,m_lines=measuring()
+m_api.update(unit,0); m_api.update(unit,1)
+assert(count(m_lines,'eye_skipped template=shotgun_p4_m1 reason=no_muzzle_name')==1,'missing muzzle name logged')
+print('gun_sights=pass offset zeroing general_pose near cap ease foreign unknown eye_weight sight_axis eye_measure eye_skipped')

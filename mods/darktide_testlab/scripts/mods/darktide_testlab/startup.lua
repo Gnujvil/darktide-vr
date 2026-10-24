@@ -27,10 +27,14 @@ function Startup.character(request,view,input,ui,t)
     request.ready_since=request.ready_since or t
     if t-request.ready_since<1 then return false end
     if request.character and not request.selected then
+        -- A character name, or "archetype:<name>" for the first character of
+        -- that class (archetype:ogryn).
+        local archetype=request.character:match("^archetype:(%S+)$")
         local index
         for i,widget in ipairs(view._character_list_widgets or {}) do
             local profile=widget.content and widget.content.profile
-            if profile and profile.name==request.character then index=i; break end
+            if profile and (archetype and profile.archetype and profile.archetype.name==archetype or
+                    not archetype and profile.name==request.character) then index=i; break end
         end
         if not index or type(view._on_character_widget_selected)~="function" then
             request.failed="character_not_found"; return false

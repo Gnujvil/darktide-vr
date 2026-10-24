@@ -165,11 +165,21 @@ end
 function Sights.install(mod, presentation)
     local api = {eyes = {}, grips = {}, correction = {0, 0, 0, 1}}
     for name, eye in pairs(Sights.SHIPPED_EYES) do api.eyes[name] = {x = eye.x, z = eye.z, source = "shipped"} end
-    local ads_since, failures, logged = nil, 0, {}
+    local ads_since, failures, logged, skipped = nil, 0, {}, {}
 
     local function log_failure(message)
         failures = failures + 1
         if failures == 1 then mod:info("DARKTIDEVR_GUN_SIGHTS failed=%s", tostring(message):sub(1, 160)) end
+    end
+    -- Why a settled stock ADS left no eye, once per gun and reason. Without it
+    -- a gun whose eye never arrives (worn shotgun, 23 October) is silent.
+    -- detail: a function returning the rest of the line, called only to log.
+    local function skip(template_name, reason, detail)
+        local key = template_name .. ":" .. reason
+        if skipped[key] then return end
+        skipped[key] = true
+        mod:info("DARKTIDEVR_GUN_SIGHTS eye_skipped template=%s reason=%s%s", template_name, reason,
+            detail and detail() or "")
     end
 
     -- The sight line's offset from the grip for a template, or nil.
@@ -261,18 +271,33 @@ function Sights.install(mod, presentation)
         local muzzle_name = template.fx_sources and template.fx_sources._muzzle
         local first_person = ScriptUnit.has_extension(unit, "first_person_system")
         local camera = first_person and first_person:first_person_unit()
-        if not loadout or not muzzle_name or not camera then return end
+        if not loadout then return skip(template.name, "no_loadout") end
+        if not muzzle_name then return skip(template.name, "no_muzzle_name") end
+        if not camera then return skip(template.name, "no_camera") end
         local unit_1p, node_1p = loadout:unit_and_node_from_node_name(inventory.wielded_slot, muzzle_name)
-        if not unit_1p or not node_1p then return end
+        if not unit_1p or not node_1p then return skip(template.name, "no_muzzle_node") end
         local muzzle_pose = Unit.world_pose(unit_1p, node_1p)
-        local local_eye = Matrix4x4.transform(Matrix4x4.inverse(muzzle_pose), Unit.world_position(camera, 1))
+        local camera_position = Unit.world_position(camera, 1)
+        local local_eye = Matrix4x4.transform(Matrix4x4.inverse(muzzle_pose), camera_position)
         -- The stock ADS camera looks along the sight line.
         local muzzle_rotation = Unit.world_rotation(unit_1p, node_1p)
         local mx, my, mz, mw = Quaternion.to_elements(muzzle_rotation)
         local look = Quaternion.rotate(Quaternion.from_elements(-mx, -my, -mz, mw), Quaternion.forward(Unit.world_rotation(camera, 1)))
         local measured = {x = Vector3.x(local_eye), z = Vector3.z(local_eye), source = "measured",
             axis = {Vector3.x(look), Vector3.y(look), Vector3.z(look)}}
-        if not Sights.offset(measured, {x = 0, z = 0}) then return end
+        if not Sights.offset(measured, {x = 0, z = 0}) then
+            -- The camera far from the sights: the camera, or the rig, is not
+            -- in its stock ADS pose. These say which.
+            return skip(template.name, "implausible", function()
+                local x, y, z = Vector3.x(local_eye), Vector3.y(local_eye), Vector3.z(local_eye)
+                local tracked = presentation.eye_pose and presentation.eye_pose(unit)
+                return string.format(
+                    " eye_in_muzzle=%.4f,%.4f,%.4f camera_to_muzzle_m=%.3f tracked_eye_to_camera_m=%s first_person_mode=%s",
+                    x, y, z, math.sqrt(x * x + y * y + z * z),
+                    tracked and string.format("%.3f", Vector3.distance(tracked, camera_position)) or "none",
+                    tostring(first_person.is_in_first_person_mode and first_person:is_in_first_person_mode()))
+            end)
+        end
         api.eyes[template.name] = measured
         local axis = Sights.axis(measured.axis)
         mod:info("DARKTIDEVR_GUN_SIGHTS eye template=%s eye_in_muzzle=%.4f,%.4f axis_right_deg=%.3f axis_up_deg=%.3f axis_used=%s previous=%s",

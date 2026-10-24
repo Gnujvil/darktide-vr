@@ -31,6 +31,23 @@ function Replay.parse(text)
     for line in text:gmatch("[^\r\n]+") do
         -- "# grip=touch": rotations are raw Touch grips, not weapon hilts.
         if line:match("^%s*#%s*grip=touch%s*$") then keys.grip="touch" end
+        -- "# walk=<m/s>": the character walks that fast the whole run (the
+        -- Psykhanium testlab cannot stride, so its ground speed is simulated).
+        local walk=line:match("^%s*#%s*walk=([%d%.]+)%s*$")
+        if walk then keys.walk=tonumber(walk) end
+        -- "# move=<forward>,<right>,<from>,<to>[,sprint]": the character really
+        -- moves (the stock move inputs, each -1..1 of its facing) from..to
+        -- seconds, sprinting if asked; one line per segment. The replayed
+        -- hands follow its translation (user, 24 October: swings while running
+        -- registered far less often than standing ones).
+        local f,r,from,to,sprint=line:match("^%s*#%s*move=([%-%d%.]+),([%-%d%.]+),([%d%.]+),([%d%.]+)(,?%a*)%s*$")
+        if f then
+            f,r,from,to=tonumber(f),tonumber(r),tonumber(from),tonumber(to)
+            if not (finite(f) and finite(r) and finite(from) and finite(to)) or math.abs(f)>1 or math.abs(r)>1 or to<=from or
+                    (sprint~="" and sprint~=",sprint") then return nil,"bad_move" end
+            keys.move=keys.move or {}
+            keys.move[#keys.move+1]={forward=f,right=r,from=from,to=to,sprint=sprint==",sprint"}
+        end
         if not line:match("^%s*#") and not line:match("^%s*$") then
             local values={}
             for token in line:gmatch("%S+") do

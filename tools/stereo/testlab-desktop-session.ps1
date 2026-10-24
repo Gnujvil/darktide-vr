@@ -49,7 +49,11 @@ $chunks=@(Get-ChildItem -LiteralPath $modSource -Filter '*.lua' -Recurse -File |
 $chunks+=Join-Path $modSource 'darktide_testlab.mod'
 $canonical=@('darktidevr_melee_inertia.lua','darktidevr_melee_pose.lua','darktidevr_melee_strokes.lua',
     'darktidevr_melee_action_bridge.lua','darktidevr_melee_timing.lua','darktidevr_melee_volume.lua','darktidevr_melee_sweep_plan.lua',
-    'darktidevr_melee_runtime.lua','darktidevr_melee_defense.lua','darktidevr_melee_weapons.lua','darktidevr_melee_tether.lua','darktidevr_melee_grip.lua')
+    'darktidevr_melee_runtime.lua','darktidevr_melee_defense.lua','darktidevr_melee_weapons.lua','darktidevr_melee_tether.lua','darktidevr_melee_grip.lua',
+    # The stock gesture route (run ... gesture) loads these three.
+    'darktidevr_melee_contact.lua','darktidevr_melee_probe.lua','darktidevr_melee_gesture_aim.lua',
+    # Data only: per-weapon sight and two-hand grip tables, reported by rangedsweep.
+    'darktidevr_gun_sights.lua','darktidevr_two_hand_support.lua')
 foreach($name in $canonical) { $chunks+=Join-Path $repoRoot "mods/darktidevr/scripts/mods/darktidevr/$name" }
 & (Join-Path $repoRoot 'tools/lua/test-lua-syntax.ps1') -SourcePaths $chunks
 $nativeRoot=Join-Path $repoRoot 'build/melee-inertia'
@@ -82,13 +86,15 @@ try {
     $bin=Join-Path $installed 'bin'; New-Item -ItemType Directory -Path $bin -Force | Out-Null
     Copy-Item -LiteralPath $native -Destination $bin -Force
     Copy-Item -LiteralPath (Join-Path $nativeRoot 'HEFT-LICENSE.txt') -Destination $bin -Force
-    $text=Get-Content -LiteralPath $settings -Raw
-    $text=[regex]::Replace($text,'screen_resolution\s*=\s*\[\s*\d+\s+\d+\s*\]',"screen_resolution = [`n 1280`n 720`n]")
-    $text=[regex]::Replace($text,'(?m)^(\s*screen_mode\s*=\s*)"[^"]+"','$1"window"')
-    foreach ($key in @('fullscreen','vsync','rt_reflections_enabled','rtxgi_enabled','motion_blur_enabled','dof_enabled','volumetric_volumes_enabled')) {
-        $text=[regex]::Replace($text,"(?m)^(\s*$key\s*=\s*)(true|false)",'${1}false')
+    # A light desktop game for this session only (the receipt restores the
+    # user's file): 1280x720 window, no ray tracing/DXR, AO, volumetrics or
+    # upscaler, small shadow maps, quarter-resolution textures.
+    $light=& {
+        . (Join-Path $repoRoot 'tools/stereo/testlab-light-settings.ps1')
+        Convert-TestlabLightSettings -Text (Get-Content -LiteralPath $settings -Raw) -Level light -Resolution 1280x720 `
+            -NoUpscaler -DeveloperMode -Windowed
     }
-    $text=[regex]::Replace($text,'(?m)^(\s*developer_mode\s*=\s*)false','${1}true')
+    $text=[regex]::Replace($light.Text,'(?m)^(\s*vsync\s*=\s*)true','${1}false')
     [IO.File]::WriteAllText($settings,$text)
     [IO.File]::WriteAllText($loadOrder,"creature_spawner`ndarktide_testlab`n")
     & (Join-Path $gameRootPath 'tools/dtkit-patch.exe') --patch (Join-Path $gameRootPath 'bundle')
