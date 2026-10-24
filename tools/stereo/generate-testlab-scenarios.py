@@ -241,6 +241,32 @@ def scenarios():
         moves = [f"move={f:g},{r:g},{a:.3f},{b:.3f}" + (",sprint" if s else "") for f, r, a, b, s in segments]
         out[name] = track.text(moves + comments)
 
+    # Small motions that are not swings (user, 24 October: "barely moving
+    # weapon counts as a swing"): a jiggle, quick short jabs, then a hold.
+    track = Track(0.0)
+    track.hold(0.0)
+    t = 0.5
+    for i in range(int(round(1.5 / STEP)) + 1):  # +-4 cm at 4 Hz: peak 1.0 m/s, 8 cm a way
+        u = i * STEP
+        track.x = 0.04 * math.sin(2 * math.pi * 4 * u)
+        track.key(t + u)
+    t += 1.5 + 0.5
+    track.x = 0.0
+    track.hold(t)
+    for _ in range(3):  # 9 cm in 0.05 s, eased back over 0.4 s (0.23 m/s)
+        track.x = 0.09
+        track.key(t + 0.05)
+        track.x = 0.0
+        track.key(t + 0.45)
+        t += 0.95
+    track.hold(t + 1.2)
+    out["touch_barely.tsv"] = track.text([
+        "Not swings: a +-4 cm jiggle at 4 Hz for 1.5 s (peak 1.0 m/s, 8 cm each way), then",
+        "three quick 9 cm jabs (0.05 s out, 0.4 s back), then a 1.2 s hold. Against a close",
+        "target, expect no strokes and no presses (floors 0.12 m drawn / 0.10 m held, 1 m/s).",
+        "  step: touch_barely.tsv|close-anchored|gesture|auto|<name>",
+    ])
+
     end = 0.35 + 8 * SWING
     moving("touch_move_walk.tsv", [(0.5, 0, 0.35, end, False)], [
         "touch_continuous walking forward at half stick (a far target, 4 m, comes into reach).",

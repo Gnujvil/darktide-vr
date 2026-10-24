@@ -10,12 +10,17 @@ local function dot(a,b) return a[1]*b[1]+a[2]*b[2]+a[3]*b[3] end
 local function unit(v,n) return {v[1]/n,v[2]/n,v[3]/n} end
 function Strokes.new(options)
     options=options or {}
+    -- The floors (min_*) and raw_speed keep a barely moving weapon from
+    -- counting (worn 24 October: a quarter of swings were small motions;
+    -- user: "barely moving weapon counts as a swing"). Raised from 0.08 m,
+    -- 0.06 m and 0.7 m/s; a real swing passes them within a few hundredths
+    -- of a second.
     local config={travel=options.travel or .18,speed=options.speed or 1.2,
-        raw_travel=options.raw_travel or .12,raw_speed=options.raw_speed or .7,
+        raw_travel=options.raw_travel or .12,raw_speed=options.raw_speed or 1,
         duration=options.duration or .045,coherence=options.coherence or .8,
         stop_speed=options.stop_speed or .35,settle=options.settle or .06,
         max_active=options.max_active or .6,max_gap=options.max_gap or .1,
-        min_travel=options.min_travel or .08,min_raw_travel=options.min_raw_travel or .06,min_duration=options.min_duration or .03,
+        min_travel=options.min_travel or .12,min_raw_travel=options.min_raw_travel or .1,min_duration=options.min_duration or .03,
         fast_speed=options.fast_speed or 1.8}
     for _,n in pairs(config) do assert(finite(n) and n>0,"invalid stroke configuration") end
     assert(config.coherence<=1 and config.stop_speed<config.speed,"invalid stroke thresholds")
@@ -238,11 +243,8 @@ function Strokes.new(options)
             local need_travel=math.max(config.min_travel,config.travel/fast)
             local need_raw=math.max(config.min_raw_travel,config.raw_travel/fast)
             local need_duration=math.max(config.min_duration,config.duration/fast)
-            -- The owner's look-ahead found an enemy on this motion's path: it
-            -- is a swing at that enemy, qualified at the floors (contact mode).
-            if request.target_ahead==true then
-                need_travel,need_raw,need_duration=config.min_travel,config.min_raw_travel,config.min_duration
-            end
+            -- No shortcut for an enemy ahead: it let small twitches toward an
+            -- enemy qualify at the floors at once (worn 24 October).
             -- Each hand must qualify independently. Alternating tiny movement
             -- between hands cannot accumulate into one coherent raw stroke.
             local dominant_qualified=raw_travel>=need_raw and raw_travel/math.max(candidate.raw_path,1e-12)>=config.coherence

@@ -157,14 +157,39 @@ do
     local fast,slow=travel_at_commit(.03),travel_at_commit(.013)
     assert(slow and slow>=.18,'a slow swing committed early: '..tostring(slow))
     assert(fast and fast<=.12,'a fast swing (3 m/s) needed the full travel: '..tostring(fast))
-    -- An enemy already on the swing's path (the owner's look-ahead): even a
-    -- slow swing qualifies at the floors, so its attack is pressed at once.
+end
+-- A barely moving weapon is not a swing (worn 24 October; user: "barely
+-- moving weapon counts as a swing"). Even fast, a motion needs 0.12 m of
+-- the drawn weapon and 0.10 m of the held one; it must also start at 1 m/s.
+do
+    local function commits_for(step_m,steps,dt,raw_step,target_ahead)
+        local owner,request,step,settle,swing,count=fixture()
+        settle()
+        local start=request.point[1]
+        request.target_ahead=target_ahead
+        for i=1,steps do
+            if raw_step then request.raw_override={start+raw_step*i,0,0} end
+            step(start+step_m*i,dt)
+        end
+        request.raw_override=nil
+        settle(20)
+        return count()
+    end
+    -- A 9 cm flick at 6 m/s is too short and too brief to count.
+    assert(commits_for(.03,3,.005)==0,'a 9 cm flick counted as a swing')
+    -- The drawn weapon at 1.5 m/s while the held one drifts at 0.8 m/s (24 cm):
+    -- the old 0.7 m/s start counted it.
+    assert(commits_for(.015,30,.01,.008)==0,'a held weapon below 1 m/s counted as a swing')
+    -- An enemy ahead no longer shortcuts a slow swing to the floors: 9 cm at
+    -- 1.3 m/s toward one stays a motion, not an attack.
+    assert(commits_for(.013,7,.01,nil,true)==0,'an enemy ahead let a small slow motion count')
+    -- A short real swing: 15 cm at 3 m/s still counts.
+    assert(commits_for(.03,5)==1,'a short real swing was lost')
+    -- A small back-and-forth jiggle (6 cm each way at 2 m/s) never counts.
     local owner,request,step,settle,swing,count=fixture()
-    settle(); request.target_ahead=true
-    local start=request.point[1]
-    local ahead
-    for i=1,40 do step(start+.013*i); if count()>0 then ahead=request.point[1]-start; break end end
-    assert(ahead and ahead<=.1,'a swing with an enemy ahead waited for the full travel: '..tostring(ahead))
+    settle()
+    for i=1,60 do step(.03*((i%6<3) and (i%6) or (6-i%6))) end
+    assert(count()==0,'a jiggle counted as swings: '..count())
 end
 -- Worn 22 October: a reset during a continuous fight (no pause at any
 -- reversal) left the detector settling for 12 s. After a reset the motion it

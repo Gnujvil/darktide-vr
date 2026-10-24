@@ -413,13 +413,8 @@ function Runtime.new(deps,options)
             end
             return result
         end
-        -- A swing whose path already reaches an enemy within the wind-up is
-        -- pressed at the start of its motion, not after its full qualifying
-        -- travel (user, 22 October: damage as the weapon arrives).
         track_hands(request)
-        local target_ahead=seeking and not state.armed and not following and strokes.status().phase=="candidate" and
-            look_ahead(charged and timing and timing.heavy_action or timing and timing.light_action,charged)~=nil or false
-        local status=strokes.update({target_ahead=target_ahead,point=tip(virtual,offset),raw_point=tip(request.dominant,offset),
+        local status=strokes.update({point=tip(virtual,offset),raw_point=tip(request.dominant,offset),
             raw_support_point=virtual.support_engaged and request.support and tip(request.support,offset) or nil,
             time=request.time,frame=request.frame,interval=interval,weapon=options.weapon,mode="physical",
             reference=state.pose_epoch,tracking_valid=true,
