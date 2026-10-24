@@ -12,6 +12,9 @@ $output = [IO.Path]::GetFullPath($OutputDirectory)
 [IO.Directory]::CreateDirectory($output) | Out-Null
 Push-Location $root
 try {
+    $buildPython = (Get-Command python -ErrorAction Stop).Source
+    & $buildPython -m pip install --disable-pip-version-check --only-binary=:all: -r tools/stereo/requirements-analysis.txt
+    if ($LASTEXITCODE) { throw 'Declared Python analysis dependencies could not be installed.' }
     # The archive digest pins both the build compiler and the shipped runtime.
     $spec = Import-PowerShellDataFile tools/dependencies/dxc-runtime.psd1
     $archive = Join-Path $root ('build/dependencies/dxc-' + $spec.Version + '.zip')
@@ -34,7 +37,7 @@ try {
     } finally { $zip.Dispose() }
     & tools/lua/build-luajit.ps1
     & tools/stereo/test-darktide-lua-source.ps1
-    & cmake --preset windows-vs2022
+    & cmake --preset windows-vs2022 "-DPython3_EXECUTABLE=$buildPython"
     if ($LASTEXITCODE) { throw 'Native configure failed.' }
     $targets = @('darktidevr_native_capture', 'darktidevr_d3d12_bootstrap', 'darktidevr-xr-harness',
         'darktidevr-frame-delivery-tests', 'darktidevr-viewer-process-tests',
