@@ -16,7 +16,18 @@ $script:LauncherKeyHeaderPlain = 'darktidevr-launcher-key-plain-v1'
 $script:LauncherKeyHeaderBackup = 'darktidevr-launcher-key-backup-v1'
 
 function Get-DefaultLauncherKeyPath {
-    return Join-Path $env:APPDATA 'DarktideVR-release\launcher-signing-key.dpapi'
+    $regular = Join-Path $env:APPDATA 'DarktideVR-release\launcher-signing-key.dpapi'
+    if (Test-Path -LiteralPath $regular -PathType Leaf) { return $regular }
+    # A packaged Codex process virtualizes Roaming into its MSIX LocalCache.
+    # The owner's ordinary PowerShell must find that same existing key rather
+    # than generate a second identity that installed launchers would not trust.
+    $packages = Join-Path $env:LOCALAPPDATA 'Packages'
+    $cached = @(Get-ChildItem -LiteralPath $packages -Directory -Filter 'OpenAI.Codex_*' -ErrorAction SilentlyContinue |
+        ForEach-Object { Join-Path $_.FullName 'LocalCache/Roaming/DarktideVR-release/launcher-signing-key.dpapi' } |
+        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+    if ($cached.Count -eq 1) { return $cached[0] }
+    if ($cached.Count -gt 1) { throw 'Multiple cached signing keys found; specify the existing key with -KeyFile.' }
+    return $regular
 }
 
 # GitHub Actions injects this value only into the signing step. Keep it in
