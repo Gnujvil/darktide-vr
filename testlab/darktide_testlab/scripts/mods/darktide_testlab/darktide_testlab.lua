@@ -1068,6 +1068,15 @@ mod.controller_input=function(held,active,t)
     state.controller_ready_at=active and state.clock or nil
     return combat_controls.sample(held,active,t)
 end
+-- The VR mod knows nothing of the testlab: the testlab registers its chord
+-- filter in the VR mod's generic list (the VR mod loads first).
+do
+    local vr=get_mod and get_mod("darktidevr")
+    if vr then
+        vr.controller_input_filters=vr.controller_input_filters or {}
+        vr.controller_input_filters.darktide_testlab=function(held,active,t) return mod.controller_input(held,active,t) end
+    end
+end
 -- Any class's weapon, for this local Psykhanium session only: a temporary
 -- item built from the game's own master item, never saved to the account
 -- or the character's loadout.

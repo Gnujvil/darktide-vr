@@ -103,7 +103,8 @@ return {
                     {
                         setting_id = "vr_two_hand_support",
                         type = "checkbox",
-                        default_value = false,
+                        -- On (user, 24 October: the gun grab tested well worn).
+                        default_value = true,
                         sub_widgets = {
                             {
                                 setting_id = "vr_two_hand_grip_mode",

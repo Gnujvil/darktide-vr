@@ -1,5 +1,5 @@
 local root=assert(arg[1])
-local Loadout=dofile(root..'/mods/darktide_testlab/scripts/mods/darktide_testlab/loadout.lua')
+local Loadout=dofile(root..'/testlab/darktide_testlab/scripts/mods/darktide_testlab/loadout.lua')
 -- Execute the actual cached native package loader, including asynchronous
 -- package references for both item instances. No game/equip result is claimed.
 local env=setmetatable({}, {__index=_G})
@@ -79,7 +79,7 @@ print('testlab_loadout=pass native_package_loader async_both_item_leases partial
 -- engine. A ranged transaction must preserve BOTH profile identities and
 -- restore the same slot that supplied its original item.
 do
-    local file=assert(io.open(root..'/mods/darktide_testlab/scripts/mods/darktide_testlab/darktide_testlab.lua','r'))
+    local file=assert(io.open(root..'/testlab/darktide_testlab/scripts/mods/darktide_testlab/darktide_testlab.lua','r'))
     local source=file:read('*all');file:close()
     local first=assert(source:find('temporary_weapon=mod:io_dofile(',1,true))
     local last=assert(source:find('\nlocal function start_manual_combat()',first,true))

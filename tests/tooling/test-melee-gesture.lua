@@ -205,8 +205,8 @@ end
 local deps={}
 for key,file in pairs({Timing='timing',Volume='volume',Planner='sweep_plan',Bridge='action_bridge',Defense='defense',Tether='tether',Contact='contact'}) do deps[key]=dofile(prefix..file..'.lua') end
 local Runtime,Pose,Inertia,Strokes=dofile(prefix..'runtime.lua'),dofile(prefix..'pose.lua'),dofile(prefix..'inertia.lua'),dofile(prefix..'strokes.lua')
-local Replay=dofile(root..'/mods/darktide_testlab/scripts/mods/darktide_testlab/trajectory.lua')
-local file=assert(io.open(root..'/mods/darktide_testlab/horizontal.tsv'))
+local Replay=dofile(root..'/testlab/darktide_testlab/scripts/mods/darktide_testlab/trajectory.lua')
+local file=assert(io.open(root..'/testlab/darktide_testlab/horizontal.tsv'))
 local keys=assert(Replay.parse(file:read('*a'))); file:close()
 local template={actions={
     windup={kind='windup',start_input='start_attack',allowed_chain_actions={

@@ -1,5 +1,5 @@
 local root=assert(arg[1])
-local prefix=root..'/mods/darktide_testlab/scripts/mods/darktide_testlab/'
+local prefix=root..'/testlab/darktide_testlab/scripts/mods/darktide_testlab/'
 local Controls=dofile(prefix..'combat_controls.lua')
 local Isolation=dofile(prefix..'range_isolation.lua')
 local toggles,allowed=0,true

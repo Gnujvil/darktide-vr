@@ -12,7 +12,7 @@ local drain_source=assert(buff_source:match('(BuffExtensionBase._update_proc_eve
 local attack_source=read('artifacts/game-reference/attack.lua')
 local attack_procs=assert(attack_source:match('(function _already_procced.-)\nlocal _attack_table'))
 local attack_buffs=assert(attack_source:match('(function _add_buffs_to_target.-)\nreturn Attack'))
-local Observations=dofile(root..'/mods/darktide_testlab/scripts/mods/darktide_testlab/observations.lua')
+local Observations=dofile(root..'/testlab/darktide_testlab/scripts/mods/darktide_testlab/observations.lua')
 for _,mode in ipairs({'early','late','mixed'}) do
     local events,warnings={},{}
     local env=setmetatable({},{__index=_G});env._G=env

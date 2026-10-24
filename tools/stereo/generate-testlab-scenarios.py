@@ -1,4 +1,4 @@
-"""Generate the testlab failure-case scenarios (mods/darktide_testlab/touch_*.tsv).
+"""Generate the testlab failure-case scenarios (testlab/darktide_testlab/touch_*.tsv).
 
 Same format as touch_repeat.tsv: "# grip=touch" (rotations are raw Touch grips),
 then one key per line:
@@ -15,7 +15,7 @@ import math
 import pathlib
 import sys
 
-ROOT = pathlib.Path(__file__).resolve().parents[2] / "mods" / "darktide_testlab"
+ROOT = pathlib.Path(__file__).resolve().parents[2] / "testlab" / "darktide_testlab"
 HEADER = "# t left_xyz left_xyzw right_xyz right_xyzw primary block left_grip right_grip special"
 LEFT = "-0.25 0.3 -0.35 0.70710678 0 0 0.70710678"  # the resting support hand of touch_repeat
 RIGHT_Y, RIGHT_Z, RIGHT_Q = 0.45, -0.3, "0 0 0 1"   # touch_repeat's swing plane and grip

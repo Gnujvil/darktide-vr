@@ -249,8 +249,8 @@ also dims the edges of your view and tightens the crosshair while you aim.
 
 ### Two-hand support (experimental)
 
-Mod Options, Darktide VR, Aiming and weapons, "Two-hand support". With a
-two-handed gun out, put your off hand on the gun anywhere from just ahead of
+Mod Options, Darktide VR, Aiming and weapons, "Two-hand support" (on by
+default). With a two-handed gun out, put your off hand on the gun anywhere from just ahead of
 your gun hand to the muzzle: the glove slides onto the foregrip (where the
 weapon's animation holds it) and, with vibration on, the controller ticks, to
 show it is safe to grip. Press grip and

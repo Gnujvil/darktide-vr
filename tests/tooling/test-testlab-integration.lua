@@ -102,9 +102,9 @@ local mod={io_dofile=function(_,path)
         if path:match('/startup$') then return dofile(base..'/scripts/mods/darktide_testlab/startup.lua') end
         if path:match('/debug_view$') then return dofile(base..'/scripts/mods/darktide_testlab/debug_view.lua') end
         if path:match('/melee_inertia$') then return fake_inertia end
-        if path:match('/melee_pose$') then return dofile(base..'/../darktidevr/scripts/mods/darktidevr/darktidevr_melee_pose.lua') end
+        if path:match('/melee_pose$') then return dofile(base..'/../../mods/darktidevr/scripts/mods/darktidevr/darktidevr_melee_pose.lua') end
         local suffix=path:match('/melee_(%w+_?%w*)$')
-        if suffix then return dofile(base..'/../darktidevr/scripts/mods/darktidevr/darktidevr_melee_'..suffix..'.lua') end
+        if suffix then return dofile(base..'/../../mods/darktidevr/scripts/mods/darktidevr/darktidevr_melee_'..suffix..'.lua') end
         return Replay
     end,info=function() end,
     hook=function(_,class,name,fn) hooks[name]=fn end,

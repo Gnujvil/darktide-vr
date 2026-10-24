@@ -74,8 +74,8 @@ api=Tracking.install(mod,presentation,tracking,function() return range and 'shoo
 api.update()
 local claim=assert(api.support_request(unit,true))
 assert(claim.control=='left_grip' and claim.action=='unbound','support grip leaked combat-ability binding')
-local Replay=dofile(root..'/mods/darktide_testlab/scripts/mods/darktide_testlab/trajectory.lua')
-local file=assert(io.open(root..'/mods/darktide_testlab/horizontal.tsv'))
+local Replay=dofile(root..'/testlab/darktide_testlab/scripts/mods/darktide_testlab/trajectory.lua')
+local file=assert(io.open(root..'/testlab/darktide_testlab/horizontal.tsv'))
 local keys=assert(Replay.parse(file:read('*a'))); file:close()
 local handler={_action_lookup={action_one_pressed=1,action_one_hold=2,action_one_release=3,action_two_hold=4},
     _input_cache={{},{},{},{}},_buffer_index=function(_,frame) return frame+1 end}
@@ -258,7 +258,7 @@ local function replay(name,weapon_name)
         {library_path=root..'/build/melee-inertia/darktidevr_melee_inertia.dll'})
     template.name=weapon_name;extension._weapons.slot_primary=weapon;component.current_action_name='none'
     flag='auto';clock=clock+2;api.update()
-    local scenario=assert(io.open(root..'/mods/darktide_testlab/'..name..'.tsv'))
+    local scenario=assert(io.open(root..'/testlab/darktide_testlab/'..name..'.tsv'))
     local recorded=assert(Replay.parse(scenario:read('*a')));scenario:close()
     assert(recorded.grip=='touch','replay expects raw Touch grips')
     local result={started=0,interrupts=0,held=0,blocked=0,pushes=0}

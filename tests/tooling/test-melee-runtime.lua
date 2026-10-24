@@ -3,8 +3,8 @@ local prefix=root..'/mods/darktidevr/scripts/mods/darktidevr/darktidevr_melee_'
 local deps={}
 for key,file in pairs({Timing='timing',Volume='volume',Planner='sweep_plan',Bridge='action_bridge',Defense='defense',Tether='tether'}) do deps[key]=dofile(prefix..file..'.lua') end
 local Runtime,Pose,Inertia,Strokes=dofile(prefix..'runtime.lua'),dofile(prefix..'pose.lua'),dofile(prefix..'inertia.lua'),dofile(prefix..'strokes.lua')
-local Replay=dofile(root..'/mods/darktide_testlab/scripts/mods/darktide_testlab/trajectory.lua')
-local file=assert(io.open(root..'/mods/darktide_testlab/horizontal.tsv'))
+local Replay=dofile(root..'/testlab/darktide_testlab/scripts/mods/darktide_testlab/trajectory.lua')
+local file=assert(io.open(root..'/testlab/darktide_testlab/horizontal.tsv'))
 local keys=assert(Replay.parse(file:read('*a'))); file:close()
 local template={actions={
     windup={kind='windup',start_input='start_attack',allowed_chain_actions={
@@ -125,7 +125,7 @@ local defensive=Runtime.new(deps,{source='synthetic',owner=defensive_owner,strok
     slot='slot_primary',unit=unit,defaults={sweep_width_mod=1,sweep_height_mod=1,sweep_range_mod=1},
     to_world=function(pose) return pose.position,pose.rotation end,
     cancel_native=function() component.current_action_name='none' end})
-local scenario=assert(io.open(root..'/mods/darktide_testlab/guard_push.tsv'))
+local scenario=assert(io.open(root..'/testlab/darktide_testlab/guard_push.tsv'))
 local defensive_keys=assert(Replay.parse(scenario:read('*a'))); scenario:close()
 local push_count,block_frames,release_count=0,0,0
 for frame=0,104 do
@@ -199,7 +199,7 @@ template.name=nil
 template.actions.heavy={kind='sweep',sweeps={{}},allowed_chain_actions={start_attack={action_name='windup',chain_time=.9}}}
 template.action_inputs.heavy_attack.input_sequence[2].auto_complete=true
 template.action_inputs.heavy_attack.input_sequence[2].time_window=1
-local heavy_file=assert(io.open(root..'/mods/darktide_testlab/heavy.tsv'))
+local heavy_file=assert(io.open(root..'/testlab/darktide_testlab/heavy.tsv'))
 local heavy_keys=assert(Replay.parse(heavy_file:read('*a'))); heavy_file:close()
 local sticky_frame,sticky_release
 local function heavy_runtime()
@@ -265,7 +265,7 @@ assert(queries==before and not runtime.inputs(130).held and component.current_ac
 runtime.close()
 end
 
-local support_file=assert(io.open(root..'/mods/darktide_testlab/support_only.tsv'))
+local support_file=assert(io.open(root..'/testlab/darktide_testlab/support_only.tsv'))
 local support_keys=assert(Replay.parse(support_file:read('*a')));support_file:close()
 for _,support_case in ipairs({'stroke','free','jiggle','toggle','jump'}) do
     runtime=heavy_runtime()

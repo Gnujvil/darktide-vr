@@ -1,4 +1,7 @@
 local mod = get_mod("darktidevr")
+-- Controller-button filters other mods may register, keyed by name:
+-- filter(held, gameplay_active, t) -> held. Kept across a reload.
+mod.controller_input_filters = mod.controller_input_filters or {}
 
 local ScriptCamera = require("scripts/foundation/utilities/script_camera")
 local ScriptViewport = require("scripts/foundation/utilities/script_viewport")
@@ -6941,15 +6944,19 @@ function presentation.inject_gameplay_input(self, main_t, input)
         profile.section("input.tag_gesture", presentation.tag_gesture.apply, player_unit,
             controller_observation.gameplay_input_active and game_mode_name~="hub", main_t)
     end
-    local testlab_held=tonumber(controller_observation.gameplay_held[0])
-    local testlab=get_mod("darktide_testlab")
-    if testlab and testlab.controller_input then
-        testlab_held=testlab.controller_input(testlab_held,controller_observation.gameplay_input_active and
+    -- The held buttons after any registered input filter: a separate
+    -- development add-on (the testlab) may claim a chord before gameplay sees
+    -- it. The mod itself registers none (user, 24 October: the test
+    -- environment is not part of the mod).
+    local held_buttons=tonumber(controller_observation.gameplay_held[0])
+    for _,filter in pairs(mod.controller_input_filters) do
+        local ok,filtered=pcall(filter,held_buttons,controller_observation.gameplay_input_active and
             not presentation.gameplay_context.ui_blocks_gameplay(Managers.ui),main_t)
+        if ok and type(filtered)=="number" then held_buttons=filtered end
     end
     local exclusive_stick=profile.section("input.communication",presentation.communication_input.sample,self,player_unit,input,
         controller_observation.gameplay_input_active,
-        testlab_held,game_mode_name,active_world)
+        held_buttons,game_mode_name,active_world)
     -- The radial owns the stick while it is open, as the comms wheel does.
     if presentation.item_radial and presentation.item_radial.open() then exclusive_stick=true end
     presentation.apply_controller_turning(main_t,exclusive_stick)
@@ -6981,7 +6988,7 @@ function presentation.inject_gameplay_input(self, main_t, input)
     if type(support_request)=='table' then support_request.now=main_t end
     local pressed, held, released = profile.section("input.bindings",presentation.controller_bindings.sample,
         controller_observation.gameplay_input_active,
-        testlab_held,
+        held_buttons,
         controller_observation.right_stick_x,controller_observation.right_stick_y,
         controller_observation.right_aim_usable,
         controller_observation.last_transport_generation, game_mode_name,support_request,exclusive_stick)

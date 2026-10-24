@@ -1,6 +1,6 @@
 -- Offline: every testlab scenario parses, and the failure-case scenarios
 -- (tools/stereo/generate-testlab-scenarios.py) have the shape they document.
--- arg[1]: mods/darktide_testlab
+-- arg[1]: testlab/darktide_testlab
 local base=assert(arg[1])
 local Replay=dofile(base..'/scripts/mods/darktide_testlab/trajectory.lua')
 local function read(name)

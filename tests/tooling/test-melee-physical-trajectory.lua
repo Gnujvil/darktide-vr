@@ -1,7 +1,7 @@
 local root=assert(arg[1])
 local prefix=root..'/mods/darktidevr/scripts/mods/darktidevr/darktidevr_melee_'
 local Inertia,Owner,Strokes=dofile(prefix..'inertia.lua'),dofile(prefix..'pose.lua'),dofile(prefix..'strokes.lua')
-local Replay=dofile(root..'/mods/darktide_testlab/scripts/mods/darktide_testlab/trajectory.lua')
+local Replay=dofile(root..'/testlab/darktide_testlab/scripts/mods/darktide_testlab/trajectory.lua')
 local function tip(pose)
     local q,p=pose.rotation,pose.position
     -- Fixed weapon-local tip; native combo/reach settings cannot move it.
@@ -10,7 +10,7 @@ local function tip(pose)
 end
 for _,profile in ipairs({'knife','hammer'}) do
     for _,name in ipairs({'horizontal.tsv','whiff.tsv','idle.tsv','jiggle.tsv','two_hand.tsv','support_only.tsv'}) do
-        local file=assert(io.open(root..'/mods/darktide_testlab/'..name))
+        local file=assert(io.open(root..'/testlab/darktide_testlab/'..name))
         local keys=assert(Replay.parse(file:read('*a'))); file:close()
         local owner=assert(Owner.new(Inertia,{profile=profile,library_path=root..'/build/melee-inertia/darktidevr_melee_inertia.dll'}))
         local strokes=Strokes.new()

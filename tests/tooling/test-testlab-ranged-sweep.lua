@@ -1,5 +1,5 @@
 -- Offline: ranged hand/muzzle frame analysis and the sweep sequencer.
--- arg[1]: mods/darktide_testlab/scripts/mods/darktide_testlab
+-- arg[1]: testlab/darktide_testlab/scripts/mods/darktide_testlab
 local base=assert(arg[1])
 local Pose=dofile(base..'/ranged_pose.lua')
 local Sweep=dofile(base..'/ranged_sweep.lua')

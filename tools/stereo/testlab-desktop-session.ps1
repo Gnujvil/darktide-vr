@@ -44,7 +44,7 @@ if ($Action -eq 'Restore') { Restore-Profile; Write-Output "testlab_profile=rest
 Assert-Closed
 if (Test-Path -LiteralPath $SessionPath) { throw 'Use a fresh session receipt; an existing backup must not be replaced' }
 if (-not (Test-Path -LiteralPath $exe)) { throw 'Darktide is not installed' }
-$modSource=Join-Path $repoRoot 'mods/darktide_testlab'
+$modSource=Join-Path $repoRoot 'testlab/darktide_testlab'
 $chunks=@(Get-ChildItem -LiteralPath $modSource -Filter '*.lua' -Recurse -File | ForEach-Object FullName)
 $chunks+=Join-Path $modSource 'darktide_testlab.mod'
 $canonical=@('darktidevr_melee_inertia.lua','darktidevr_melee_pose.lua','darktidevr_melee_strokes.lua',

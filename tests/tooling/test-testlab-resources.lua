@@ -1,5 +1,5 @@
 local root=assert(arg[1])
-local Resources=dofile(root..'/mods/darktide_testlab/scripts/mods/darktide_testlab/resources.lua')
+local Resources=dofile(root..'/testlab/darktide_testlab/scripts/mods/darktide_testlab/resources.lua')
 local smoke='content/fx/particles/weapons/swords/chainsword/chainsword_weapon_special_activate_smoke'
 local original_fx='content/fx/particles/weapons/original'
 local env=setmetatable({}, {__index=_G})
