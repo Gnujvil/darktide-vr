@@ -3,8 +3,12 @@
 #include <Windows.h>
 
 #include <array>
+#include <cwchar>
+#include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace darktidevr::producer::viewer {
 namespace {
@@ -67,6 +71,43 @@ std::wstring output_directory() {
   return directory;
 }
 
+std::vector<wchar_t> viewer_environment() {
+  const std::unique_ptr<wchar_t, decltype(&FreeEnvironmentStringsW)> inherited(
+      GetEnvironmentStringsW(), &FreeEnvironmentStringsW);
+  if (!inherited) return {};
+
+  // Steam starts Darktide as the flat game 1361210. Its separate OpenXR viewer
+  // needs its own application identity, while the game keeps its Steam login.
+  // Filter a child-only snapshot: changing the process environment here would
+  // also affect game threads. Preserve XR_RUNTIME_JSON and every other value.
+  constexpr std::array names{std::wstring_view{L"SteamAppId"},
+      std::wstring_view{L"SteamGameId"}, std::wstring_view{L"SteamOverlayGameId"},
+      std::wstring_view{L"STEAMVR_APPKEY"}};
+  std::vector<wchar_t> block;
+  for (const auto* current = inherited.get(); *current;
+       current += std::wcslen(current) + 1) {
+    const std::wstring_view entry(current);
+    bool steam_identity = false;
+    for (const auto name : names) {
+      const auto length = static_cast<int>(name.size());
+      if (entry.size() > name.size() && entry[name.size()] == L'=' &&
+          CompareStringOrdinal(entry.data(), length, name.data(), length,
+                               TRUE) == CSTR_EQUAL) {
+        steam_identity = true;
+        break;
+      }
+    }
+    if (!steam_identity) {
+      // Keeping the original order also preserves Windows' hidden =C: entries.
+      block.insert(block.end(), entry.begin(), entry.end());
+      block.push_back(L'\0');
+    }
+  }
+  block.push_back(L'\0');
+  if (block.size() == 1) block.push_back(L'\0');
+  return block;
+}
+
 // Reaps a finished child so state() reports the exit instead of a stale run.
 void reap_locked(ViewerState& state) {
   if (!state.process) {
@@ -108,6 +149,11 @@ int start_locked(ViewerState& state) {
   if (directory.empty()) {
     state.last_error = ERROR_PATH_NOT_FOUND;
     return 3;
+  }
+  auto environment = viewer_environment();
+  if (environment.empty()) {
+    state.last_error = GetLastError();
+    return 5;
   }
   const auto pid = std::to_wstring(GetCurrentProcessId());
   state.stop_file = directory + L"viewer-stop-" + pid + L".flag";
@@ -153,7 +199,8 @@ int start_locked(ViewerState& state) {
   PROCESS_INFORMATION information{};
   const auto created = CreateProcessW(
       executable.c_str(), command.data(), nullptr, nullptr, TRUE,
-      CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr,
+      CREATE_NO_WINDOW | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+      environment.data(),
       module_directory().c_str(), &startup, &information);
   if (!created) {
     state.last_error = GetLastError();

@@ -17,6 +17,7 @@
         # Empty switch: renamed to KeyboardMouseOn it starts the game in the
         # experimental keyboard and mouse mode, for headsets without controllers.
         @{ Source = 'mods/darktidevr/KeyboardMouseOff'; Destination = 'mods/darktidevr/KeyboardMouseOff' }
+        @{ Source = 'tools/release/package-files/darktidevr_physical_melee.flag'; Destination = 'mods/darktidevr/darktidevr_physical_melee.flag' }
         @{ Source = 'tools/stereo/set-skinner-assert-patch.ps1'; Destination = 'mods/darktidevr/tools/set-skinner-assert-patch.ps1' }
         @{ Source = 'build/windows-vs2022/src/producer/Release/d3d12.dll'; Destination = 'mods/darktidevr/bin/d3d12.dll' }
         @{ Source = 'build/windows-vs2022/src/producer/Release/darktidevr_native_capture.dll'; Destination = 'mods/darktidevr/bin/darktidevr_native_capture.dll' }

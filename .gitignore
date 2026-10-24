@@ -6,6 +6,8 @@
 *.local.*
 secrets.*
 !secrets.example.*
+*.dpapi
+*.key
 
 # Agent and editor machine state
 .codex/

@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- One exe for players: .NET Framework 4.8 ships with Windows 10 1903+
+       and Windows 11, so nothing else is installed. Build it with
+       tools/release/build-launcher.ps1, which embeds the release key. -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <!-- 64-bit: registry and System32 must not be redirected to the 32-bit views. -->
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>DarktideVR-Launcher</AssemblyName>
+    <RootNamespace>DarktideVR.Launcher</RootNamespace>
+    <StartupObject>DarktideVR.Launcher.Program</StartupObject>
+    <Product>Darktide VR Launcher</Product>
+    <AssemblyTitle>Darktide VR Launcher</AssemblyTitle>
+    <Company>Darktide VR</Company>
+    <Copyright>MIT licence</Copyright>
+    <Version>0.1.0</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <DebugType Condition="'$(Configuration)' == 'Release'">none</DebugType>
+    <GenerateSatelliteAssembliesForCore>false</GenerateSatelliteAssembliesForCore>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- The public half of the release signing key. A test build passes its
+         own key file; a player build embeds launcher/release-signing-key.pub. -->
+    <ReleasePublicKeyFile Condition="'$(ReleasePublicKeyFile)' == ''">$(MSBuildThisFileDirectory)release-signing-key.pub</ReleasePublicKeyFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ApplicationDefinition Remove="App.xaml" />
+    <Page Include="App.xaml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="System.Web" />
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="$(ReleasePublicKeyFile)" LogicalName="release-signing-key.pub" Condition="Exists('$(ReleasePublicKeyFile)')" />
+    <Resource Include="app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

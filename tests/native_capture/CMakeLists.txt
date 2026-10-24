@@ -1,4 +1,36 @@
 add_executable(darktidevr-native-capture-tests main.cpp)
+add_executable(darktidevr-frame-delivery-tests frame_delivery.cpp)
+target_compile_options(darktidevr-frame-delivery-tests PRIVATE /W4 /WX /permissive-)
+target_compile_definitions(darktidevr-frame-delivery-tests PRIVATE
+  NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+target_link_libraries(darktidevr-frame-delivery-tests PRIVATE darktidevr_bridge d3d12 dxgi)
+if(BUILD_TESTING)
+  add_test(NAME frame_delivery COMMAND darktidevr-frame-delivery-tests
+    $<TARGET_FILE:darktidevr_native_capture>)
+  set_tests_properties(frame_delivery PROPERTIES TIMEOUT 45 RUN_SERIAL TRUE
+    PASS_REGULAR_EXPRESSION "frame_delivery=pass"
+    LABELS "native;d3d12;stereo")
+endif()
+
+# Exercise the real viewer launcher with a process that only reports its
+# environment. The fixture never loads OpenXR or uses the headset/GPU.
+if(BUILD_TESTING)
+  add_executable(darktidevr-viewer-environment-probe viewer_environment_probe.cpp)
+  add_executable(darktidevr-viewer-process-tests viewer_process.cpp
+    "${PROJECT_SOURCE_DIR}/src/producer/viewer_process.cpp")
+  foreach(target IN ITEMS darktidevr-viewer-environment-probe darktidevr-viewer-process-tests)
+    target_compile_options(${target} PRIVATE /W4 /WX /permissive-)
+    target_compile_definitions(${target} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
+    target_include_directories(${target} PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    set_target_properties(${target} PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/viewer-fixture")
+  endforeach()
+  set_target_properties(darktidevr-viewer-environment-probe PROPERTIES
+    OUTPUT_NAME "darktidevr-xr-harness")
+  add_dependencies(darktidevr-viewer-process-tests darktidevr-viewer-environment-probe)
+  add_test(NAME viewer_process_identity COMMAND darktidevr-viewer-process-tests)
+  set_tests_properties(viewer_process_identity PROPERTIES TIMEOUT 15 LABELS "phase1;viewer;cpu")
+endif()
 add_executable(darktidevr-cascade-stage-forwarding-tests cascade_stage_forwarding.cpp)
 target_compile_options(darktidevr-cascade-stage-forwarding-tests PRIVATE /W4 /WX /permissive-)
 target_compile_definitions(darktidevr-cascade-stage-forwarding-tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)

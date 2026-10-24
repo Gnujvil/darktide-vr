@@ -2022,7 +2022,8 @@ int capture_menu_from_resource(ID3D12CommandQueue* queue,
                                UINT capture_height = 0);
 int capture_menu_from_engine_canvas(ID3D12CommandQueue* queue,
                                     ID3D12Resource* canvas,
-                                    unsigned int width, unsigned int height);
+                                    unsigned int width, unsigned int height,
+                                    bool retain_source = true);
 int ensure_menu_surface(ID3D12Device* device,
                         const D3D12_RESOURCE_DESC& source_description,
                         DXGI_FORMAT render_target_format = DXGI_FORMAT_UNKNOWN);
@@ -13201,28 +13202,39 @@ HRESULT STDMETHODCALLTYPE present_hook(IDXGISwapChain* swapchain,
   // 2112x2304 eye canvas into its own client extent, so a loading screen
   // taken from the window was squashed to that aspect.
   if (menu_virtual_capture_enabled.load(std::memory_order_relaxed) &&
-      candidate && queue &&
+      candidate && (queue || present_queue) &&
       (darktidevr::core::flat_interactive_active(presentation_mode) ||
        presentation_mode ==
            darktidevr::core::SharedPresentationMode::flat_loading_or_cinematic)) {
-    const auto canvas = engine_eye_backbuffers.find(
+    auto canvas = engine_eye_backbuffers.find(
         reinterpret_cast<std::uintptr_t>(candidate.Get()),
         resize_diagnostic_generation.load(std::memory_order_relaxed),
         candidate->GetCurrentBackBufferIndex());
+    const bool private_canvas = canvas != nullptr;
+    // The regular native renderer has no experimental private backbuffer.
+    // Publish its current game-owned DXGI image directly instead of waiting
+    // forever for a canvas that only the packed rendering path creates.
+    // Use the presentation queue so the copy follows the game's rendering.
+    if (!canvas) {
+      (void)candidate->GetBuffer(candidate->GetCurrentBackBufferIndex(),
+                                IID_PPV_ARGS(&canvas));
+    }
+    const auto canvas_queue = private_canvas ? queue : present_queue;
     const auto width =
         current_presentation_source_width.load(std::memory_order_relaxed);
     const auto height =
         current_presentation_source_height.load(std::memory_order_relaxed);
-    if (canvas) {
+    if (canvas && canvas_queue) {
       const auto canvas_result = capture_menu_from_engine_canvas(
-          queue.Get(), canvas.Get(), width, height);
-      if (canvas_result != 0 || present % 600 == 0) {
+          canvas_queue.Get(), canvas.Get(), width, height, private_canvas);
+      if (canvas_result != 0 || present <= 5 || present % 600 == 0) {
         menu_resource_log_budget.run([&] {
           write_menu_resource_log(
               "MENU_CANVAS_CAPTURE\tframe=%llu\tresult=%d\textent=%ux%u"
-              "\tready=%llu\r\n",
+              "\tready=%llu\tsource=%s\r\n",
               present, canvas_result, width, height,
-              static_cast<unsigned long long>(menu_ready_value));
+              static_cast<unsigned long long>(menu_ready_value),
+              private_canvas ? "private_canvas" : "swapchain");
         });
       }
     }
@@ -14631,7 +14643,8 @@ int ensure_menu_surface(ID3D12Device* device,
   const auto handle_result =
       SUCCEEDED(resource_result)
           ? device->CreateSharedHandle(menu_surface.Get(), nullptr, GENERIC_ALL,
-                                       kMenuSurfaceName, &menu_surface_handle)
+                                       darktidevr::core::shared_object_name(kMenuSurfaceName).c_str(),
+                                       &menu_surface_handle)
           : E_FAIL;
   const auto heap_result =
       SUCCEEDED(handle_result)
@@ -14663,7 +14676,8 @@ int ensure_menu_surface(ID3D12Device* device,
       SUCCEEDED(ready_fence_result)
           ? device->CreateSharedHandle(
                 menu_ready_fence.Get(), nullptr, GENERIC_ALL,
-                kMenuReadyFenceName, &menu_ready_fence_handle)
+                darktidevr::core::shared_object_name(kMenuReadyFenceName).c_str(),
+                &menu_ready_fence_handle)
           : E_FAIL;
   if (FAILED(ready_fence_result) || FAILED(ready_handle_result)) {
     menu_resource_log_budget.run([&] {
@@ -14680,7 +14694,8 @@ int ensure_menu_surface(ID3D12Device* device,
       SUCCEEDED(consumed_fence_result)
           ? device->CreateSharedHandle(
                 menu_consumed_fence.Get(), nullptr, GENERIC_ALL,
-                kMenuConsumedFenceName, &menu_consumed_fence_handle)
+                darktidevr::core::shared_object_name(kMenuConsumedFenceName).c_str(),
+                &menu_consumed_fence_handle)
           : E_FAIL;
   if (FAILED(consumed_fence_result) || FAILED(consumed_handle_result)) {
     menu_resource_log_budget.run([&] {
@@ -15088,7 +15103,8 @@ int capture_menu_from_resource(ID3D12CommandQueue* queue,
 // resolution no longer follows the desktop client.
 int capture_menu_from_engine_canvas(ID3D12CommandQueue* queue,
                                     ID3D12Resource* canvas,
-                                    unsigned int width, unsigned int height) {
+                                    unsigned int width, unsigned int height,
+                                    bool retain_source) {
   if (!queue || !canvas || width < 2 || height < 2) {
     return 93;
   }
@@ -15152,7 +15168,7 @@ int capture_menu_from_engine_canvas(ID3D12CommandQueue* queue,
   // The blit expects the destination in the PRESENT state; the shared menu
   // surface rests in COMMON, which D3D12 defines as the same state.
   if (FAILED(pending.mirror_blit->record(device.Get(), pending.commands.Get(),
-                                         canvas, destination.Get()))) {
+                                         canvas, destination.Get(), retain_source))) {
     return 98;
   }
   if (FAILED(pending.commands->Close())) {
@@ -17410,9 +17426,17 @@ extern "C" __declspec(dllexport) int dtvr_reset_eye_capture_tags() {
   boundary_tag_reset_count.fetch_add(armed_eye_captures.size(),
                                      std::memory_order_relaxed);
   armed_eye_captures.clear();
+  // The replacement viewer clears its shared mapping, including the producer's
+  // orientation commit. Restore that commit when Lua observes the new viewer
+  // epoch; otherwise every native-ring frame is rejected as generation zero.
+  const auto generation = current_gameplay_generation.load(std::memory_order_acquire);
+  if (generation != 0) {
+    shared_head_pose_reader().publish_gameplay_generation(generation);
+  }
   write_boundary_census_log(
-      "frame=%llu\tTAG_RESET\r\n",
-      present_count.load(std::memory_order_relaxed));
+      "frame=%llu\tTAG_RESET\tgameplay_generation=%llu\r\n",
+      present_count.load(std::memory_order_relaxed),
+      static_cast<unsigned long long>(generation));
   return 0;
 }
 extern "C" __declspec(dllexport) int dtvr_wait_eye_capture_count(

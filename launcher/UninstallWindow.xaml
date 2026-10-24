@@ -1,0 +1,21 @@
+<Window x:Class="DarktideVR.Launcher.UninstallWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Uninstall Darktide VR" Width="480" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize" ShowInTaskbar="False"
+        Background="{StaticResource Bg}" FontFamily="Segoe UI" UseLayoutRounding="True">
+    <StackPanel Margin="24,20,24,20">
+        <TextBlock x:Name="Heading" FontSize="18" FontWeight="SemiBold" Text="Uninstall Darktide VR" />
+        <TextBlock x:Name="Body" FontSize="12.5" Foreground="{StaticResource TextDim}" TextWrapping="Wrap" Margin="0,10,0,14" />
+        <CheckBox x:Name="ModLoaderBox" Margin="0,0,0,8">
+            <TextBlock x:Name="ModLoaderText" TextWrapping="Wrap" Foreground="{StaticResource TextDim}" />
+        </CheckBox>
+        <CheckBox x:Name="DataBox">
+            <TextBlock x:Name="DataText" TextWrapping="Wrap" Foreground="{StaticResource TextDim}" />
+        </CheckBox>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+            <Button x:Name="CancelButton" Style="{StaticResource Secondary}" IsCancel="True" Content="Cancel" />
+            <Button x:Name="ConfirmButton" Style="{StaticResource Primary}" Content="Uninstall" Margin="10,0,0,0" Click="Confirm_Click" />
+        </StackPanel>
+    </StackPanel>
+</Window>

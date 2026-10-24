@@ -25,7 +25,8 @@ inline constexpr bool engine_flat_mirror_required(
 class DesktopMirrorBlit {
  public:
   HRESULT record(ID3D12Device* device, ID3D12GraphicsCommandList* commands,
-                 ID3D12Resource* source, ID3D12Resource* destination) {
+                 ID3D12Resource* source, ID3D12Resource* destination,
+                 bool retain_source = true) {
     if (!device || !commands || !source || !destination || source == destination) return E_INVALIDARG;
     const auto src = source->GetDesc(), dst = destination->GetDesc();
     if (src.Format != DXGI_FORMAT_R8G8B8A8_UNORM || dst.Format != src.Format ||
@@ -36,9 +37,10 @@ class DesktopMirrorBlit {
       const auto hr = initialize(device);
       if (FAILED(hr)) return hr;
     }
-    // DXGI owns the destination across Present; retaining it in an idle slot
-    // would prevent ResizeBuffers. The source is an independently owned image.
-    source_ = source;
+    // DXGI owns swapchain images until its queue drains before ResizeBuffers.
+    // Retain private source images, but never pin a DXGI source or destination
+    // in an idle command slot after its GPU work has completed.
+    source_ = retain_source ? source : nullptr;
     D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
     srv.Format = src.Format; srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;

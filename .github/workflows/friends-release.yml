@@ -1,0 +1,63 @@
+name: Build and publish friends launcher
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: friends-release-main
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'Gnujvil/darktide-vr' && github.ref == 'refs/heads/main'
+    runs-on: windows-2022
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: version
+        run: '"version=0.4.${{ github.run_number }}" >> $env:GITHUB_OUTPUT'
+      - name: Build and verify launcher and runtime
+        run: ./tools/release/build-friends-release.ps1 -Version '${{ steps.version.outputs.version }}' -OutputDirectory "$env:RUNNER_TEMP/friends-release"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: friends-release
+          path: |
+            ${{ runner.temp }}/friends-release/DarktideVR-Launcher.exe
+            ${{ runner.temp }}/friends-release/package.json
+            ${{ runner.temp }}/friends-release/packages/*.zip
+            ${{ runner.temp }}/friends-release/component-provenance.json
+          if-no-files-found: error
+          retention-days: 14
+  publish:
+    needs: build
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: friends-release
+          path: ${{ runner.temp }}/friends-release
+      - name: Sign and publish the complete release
+        env:
+          DARKTIDEVR_RELEASE_SIGNING_KEY: ${{ secrets.DARKTIDEVR_RELEASE_SIGNING_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: ./tools/release/publish-friends-release.ps1 -BuildDirectory "$env:RUNNER_TEMP/friends-release" -Version '${{ needs.build.outputs.version }}' -Revision '${{ github.sha }}'

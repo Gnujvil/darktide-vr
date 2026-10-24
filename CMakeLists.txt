@@ -34,7 +34,7 @@ FetchContent_Declare(
   OpenXRSDK
   GIT_REPOSITORY https://github.com/KhronosGroup/OpenXR-SDK.git
   GIT_TAG 5267613edf3d937e3d77556a106a65c2f82b25c6
-  GIT_SHALLOW TRUE
+  GIT_SHALLOW FALSE
   GIT_PROGRESS TRUE
 )
 FetchContent_MakeAvailable(OpenXRSDK)
@@ -45,7 +45,7 @@ FetchContent_Declare(
   minhook
   GIT_REPOSITORY https://github.com/TsudaKageyu/minhook.git
   GIT_TAG c3fcafdc10146beb5919319d0683e44e3c30d537
-  GIT_SHALLOW TRUE
+  GIT_SHALLOW FALSE
   GIT_PROGRESS TRUE
 )
 FetchContent_MakeAvailable(minhook)

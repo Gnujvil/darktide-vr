@@ -3075,6 +3075,19 @@ class OpenXrProbe {
               original_surfaces=darktidevr::bridge::open_shared_generated_surfaces(device,original_names,
                   {{original_state.width,original_state.height},static_cast<DXGI_FORMAT>(original_state.format)});
               ingested_original_ready=last_original_ready=last_original_pose=generated_displayed_before_original=0;
+              const auto initial_ready = original_surfaces->ready_fence->GetCompletedValue();
+              if (initial_ready == UINT64_MAX) {
+                throw std::runtime_error("Original-frame fence generation is poisoned");
+              }
+              // Existing slots can carry poses from the previous XR process,
+              // for which this viewer has no pose history. Release completed
+              // startup slots just like the legacy eye mailbox so the producer
+              // can publish a frame associated with this tracking session.
+              if (initial_ready != 0) {
+                check(original_surfaces->consumed_fence->Signal(initial_ready),
+                      "Discard pre-attachment original frames");
+                ingested_original_ready = initial_ready;
+              }
               generated_cadence={};
               D3D12_HEAP_PROPERTIES heap{}; heap.Type=D3D12_HEAP_TYPE_DEFAULT;
               const auto description=cached_eye_resources[0]->GetDesc();

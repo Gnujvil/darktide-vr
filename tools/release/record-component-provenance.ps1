@@ -30,7 +30,10 @@ $components = @(
        dependencies = 'MinHook c3fcafdc10146beb5919319d0683e44e3c30d537 (BSD-2-Clause, static); Windows SDK and D3D12/DXGI/DXC headers from the toolchain; no NVIDIA Streamline code (project-declared ABI 2.7.30)' },
     @{ name = 'viewer'; targets = @('darktidevr-xr-harness')
        outputs = @('mods/darktidevr/bin/darktidevr-xr-harness.exe')
-       dependencies = 'Khronos OpenXR SDK loader release 1.1.61 commit 5267613 (Apache-2.0, app-local openxr_loader.dll); Windows SDK D3D12/D3D11/DXGI' }
+       dependencies = 'Khronos OpenXR SDK loader release 1.1.61 commit 5267613 (Apache-2.0, app-local openxr_loader.dll); Windows SDK D3D12/D3D11/DXGI' },
+    @{ name = 'melee-inertia'; script = 'tools/stereo/build-melee-inertia.ps1'
+       outputs = @('mods/darktidevr/bin/darktidevr_melee_inertia.dll')
+       dependencies = 'Vendored HEFT sources and license in src/melee_inertia/vendor/heft; MSVC x64 runtime' }
 )
 $spec = Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'runtime-package-files.psd1')
 $sourceByDestination = @{}
@@ -44,9 +47,11 @@ $toolchain = "Visual Studio 17 2022 generator, MSVC $msvc, Windows SDK $sdk, $cm
 
 $records = @()
 foreach ($component in $components) {
-    $buildCommand = "cmake --build $buildDirectory --config Release --target " + ($component.targets -join ' ')
+    $buildCommand = if ($component.ContainsKey('script')) { 'powershell -File ' + $component.script }
+        else { "cmake --build $buildDirectory --config Release --target " + ($component.targets -join ' ') }
     if (-not $SkipBuild) {
-        & $cmake.Source --build (Join-Path $root $buildDirectory) --config Release --target @($component.targets) | Out-Null
+        if ($component.ContainsKey('script')) { & (Join-Path $root $component.script) | Out-Null }
+        else { & $cmake.Source --build (Join-Path $root $buildDirectory) --config Release --target @($component.targets) | Out-Null }
         if ($LASTEXITCODE -ne 0) { throw "Build failed: $buildCommand" }
     }
     $files = @()
