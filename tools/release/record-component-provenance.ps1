@@ -61,13 +61,18 @@ foreach ($component in $components) {
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Build output missing: $path" }
         $files += [ordered]@{ path = $output; sha256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
     }
+    $options = if ($component.ContainsKey('script')) {
+        'Release x64; cl /std:c++20 /EHsc /W4 /O2 /LD /DDTVR_MELEE_BUILD; numerical acceptance from build-melee-inertia.ps1'
+    } else {
+        'Release, x64, /W4 /WX /permissive-, NOMINMAX WIN32_LEAN_AND_MEAN UNICODE, CMake cache in build/windows-vs2022 (configure: cmake -S . -B build/windows-vs2022 -G "Visual Studio 17 2022" -A x64)'
+    }
     $records += [ordered]@{
         name = $component.name
         source_revision = $identity.head
         source_dirty = $false
         build_command = $buildCommand
         toolchain = $toolchain
-        build_options = 'Release, x64, /W4 /WX /permissive-, NOMINMAX WIN32_LEAN_AND_MEAN UNICODE, CMake cache in build/windows-vs2022 (configure: cmake -S . -B build/windows-vs2022 -G "Visual Studio 17 2022" -A x64)'
+        build_options = $options
         dependencies = $component.dependencies
         files = $files
     }

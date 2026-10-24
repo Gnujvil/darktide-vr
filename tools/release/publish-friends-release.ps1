@@ -32,9 +32,9 @@ $release = Join-Path $build 'signed'
     -Repo $Repo -SigningKeyEnvironmentVariable DARKTIDEVR_RELEASE_SIGNING_KEY `
     -Notes "Automatic main build $Revision. Includes the launcher, mod loader/framework setup, SteamVR/Virtual Desktop runtime selection, and signed automatic updates."
 if (-not (Test-Path -LiteralPath (Join-Path $release 'darktidevr-release.json.sig'))) { throw 'Signed manifest was not produced.' }
-$existing = & gh release view "v$Version" --repo $Repo --json isDraft,targetCommitish 2>$null
-if ($LASTEXITCODE -eq 0) {
-    $info = $existing | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'github-release.ps1')
+$info = Get-ExistingGitHubRelease -Repo $Repo -Tag "v$Version"
+if ($info) {
     if ($info.targetCommitish -ne $Revision) { throw 'Existing release points at another revision.' }
     if (-not $info.isDraft) { Write-Output "release_already_published=v$Version"; return }
 } else {
