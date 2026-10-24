@@ -14,6 +14,7 @@
 #include "synthetic_controller_path.h"
 #include "synthetic_head_path.h"
 #include "panel_renderer.h"
+#include "projection_reprojection.h"
 #include "tracked_cuff_renderer.h"
 #include "window_capture.h"
 #include "capture_worker.h"
@@ -290,6 +291,7 @@ class OpenXrProbe {
     XrInstanceProperties properties{XR_TYPE_INSTANCE_PROPERTIES};
     check_xr(xrGetInstanceProperties(instance_, &properties),
              "xrGetInstanceProperties");
+    runtime_name_ = properties.runtimeName;
     std::cout << "openxr.instance=created\n"
               << "openxr.runtime_name=" << properties.runtimeName << '\n'
               << "openxr.runtime_version="
@@ -414,6 +416,8 @@ class OpenXrProbe {
       xrDestroyInstance(instance_);
     }
   }
+
+  const std::string& runtime_name() const { return runtime_name_; }
 
   std::optional<LUID> adapter_luid() const {
     if (!requirements_) {
@@ -1690,6 +1694,8 @@ class OpenXrProbe {
         "darktidevr-menu-readback.request";
     auto next_menu_readback_request_poll = start;
     std::array<ComPtr<ID3D12Resource>, 2> shared_eye_readbacks;
+    std::unique_ptr<darktidevr::harness::ProjectionReprojector> native_projection;
+    std::uint64_t native_projection_frames{};
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT shared_eye_readback_footprint{};
     std::uint64_t shared_eye_readback_total_bytes{};
     bool shared_eye_readback_requested{};
@@ -2611,6 +2617,8 @@ class OpenXrProbe {
       // directions in the two eyes -- and 5.9 vertically.
       std::array<XrPosef, 2> submitted_view_poses{};
       std::array<XrFovf, 2> submitted_view_fovs{};
+      std::array<XrPosef, 2> native_view_poses{};
+      std::array<XrFovf, 2> native_view_fovs{};
       bool submitted_view_projection_valid{};
       // Experimental keyboard and mouse play adds controller disabling and the
       // mouse-aimed reticle; the reticle needs to know before the eye images
@@ -3425,6 +3433,8 @@ class OpenXrProbe {
                 located_views[eye].fov.angleRight,
                 located_views[eye].fov.angleUp,
                 located_views[eye].fov.angleDown};
+            native_view_poses[eye] = base_pose;
+            native_view_fovs[eye] = located_views[eye].fov;
             // The projection for an image the cameras rendered ZOOMED. Not
             // the render projection -- submitting that makes the two agree and
             // removes the zoom, leaving the narrow image covering less of the
@@ -4250,6 +4260,30 @@ class OpenXrProbe {
           command_list->ResourceBarrier(
               static_cast<UINT>(destination_barriers.size()),
               destination_barriers.data());
+        }
+        // Steam Link has a reported stereo-composition failure when an app
+        // submits mutated per-eye FOVs, especially around dashboard overlays.
+        // Keep the accepted game cameras, but resample their matched pose/FOV
+        // images into the runtime's native projection before handing them over.
+        // https://steamcommunity.com/app/250820/discussions/8/755052476151079913/
+        if (runtime_name_ == "SteamVR/OpenXR" && separate_shared_eye_swapchains &&
+            submitted_view_projection_valid &&
+            (use_shared_pair || use_cached_pair || use_generated_pair)) {
+          if (!native_projection) {
+            native_projection = std::make_unique<darktidevr::harness::ProjectionReprojector>(
+                device, static_cast<DXGI_FORMAT>(swapchain_format_), resources[0]->GetDesc());
+          }
+          std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 2> targets{};
+          for (std::size_t eye = 0; eye < targets.size(); ++eye)
+            targets[eye].ptr = rtv_heap->GetCPUDescriptorHandleForHeapStart().ptr +
+                static_cast<SIZE_T>(rtv_base_offsets[eye] + image_indices[eye]) * rtv_increment;
+          native_projection->record(command_list.Get(), {resources[0], resources[1]}, targets,
+              submitted_view_poses, submitted_view_fovs, native_view_poses, native_view_fovs,
+              drew_into_eye_images ? D3D12_RESOURCE_STATE_RENDER_TARGET : D3D12_RESOURCE_STATE_COMMON);
+          submitted_view_poses = native_view_poses;
+          submitted_view_fovs = native_view_fovs;
+          if (++native_projection_frames == 1)
+            std::cout << "openxr.gameplay_projection=runtime-native source=recentered-symmetric\n";
         }
         check_command_list_close(command_list.Get(), device, frame,
                                  "ID3D12GraphicsCommandList::Close(theatre)",
@@ -6703,6 +6737,7 @@ class OpenXrProbe {
   }
 
   XrInstance instance_{XR_NULL_HANDLE};
+  std::string runtime_name_;
   XrSystemId system_id_{XR_NULL_SYSTEM_ID};
   XrSession session_{XR_NULL_HANDLE};
   XrSpace local_space_{XR_NULL_HANDLE};
@@ -6883,11 +6918,11 @@ class Harness {
     ++resize_count_;
   }
 
-  void finish() {
+  void finish(std::string_view runtime_name) {
     wait_for_gpu();
     check(device_->GetDeviceRemovedReason(),
           "ID3D12Device::GetDeviceRemovedReason");
-    validate_debug_messages();
+    validate_debug_messages(runtime_name);
   }
 
   const DXGI_ADAPTER_DESC3& adapter_description() const { return adapter_desc_; }
@@ -7088,7 +7123,7 @@ class Harness {
                    "ID3D12Fence::SetEventOnCompletion");
   }
 
-  void validate_debug_messages() {
+  void validate_debug_messages(std::string_view runtime_name) {
     if (!info_queue_) {
       return;
     }
@@ -7097,20 +7132,30 @@ class Harness {
       return;
     }
     std::string descriptions;
+    UINT64 error_count{};
     for (UINT64 index = 0; index < count; ++index) {
       SIZE_T bytes{};
       info_queue_->GetMessage(index, nullptr, &bytes);
       std::vector<std::byte> storage(bytes);
       auto* message = reinterpret_cast<D3D12_MESSAGE*>(storage.data());
       if (SUCCEEDED(info_queue_->GetMessage(index, message, &bytes))) {
+        if (darktidevr::xr::is_known_runtime_validation_probe(
+                runtime_name, message->ID)) {
+          std::cout << "d3d12.known_runtime_probe id=" << message->ID
+                    << " runtime=" << runtime_name << " text="
+                    << message->pDescription << '\n';
+          continue;
+        }
         if (!descriptions.empty()) {
           descriptions += "; ";
         }
         descriptions.append(message->pDescription, message->DescriptionByteLength);
       }
+      ++error_count;
     }
+    if (error_count == 0) return;
     throw std::runtime_error("D3D12 debug layer reported " +
-                             std::to_string(count) + " error(s): " +
+                             std::to_string(error_count) + " error(s): " +
                              descriptions);
   }
 
@@ -7593,7 +7638,7 @@ int wmain(int argc, wchar_t** argv) {
                                 std::chrono::steady_clock::now() - frame_start)
                                 .count());
     }
-    harness.finish();
+    harness.finish(openxr.runtime_name());
     const auto elapsed = std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - start);
     const auto& adapter = harness.adapter_description();

@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory)][string] $Executable,
     [Parameter(Mandatory)][string] $CaptureLibrary,
-    [Parameter(Mandatory)][string] $BootstrapLibrary
+    [Parameter(Mandatory)][string] $BootstrapLibrary,
+    [switch] $InteropOnly
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
@@ -28,15 +29,27 @@ function Invoke-StartupCase([int] $Mask, [string] $Text = 'enabled', [bool] $Ena
     $dump = [int][bool]($Mask -band 2)
     $substitution = [int][bool]($Mask -band 4)
     $pixel = [int]([bool]($Mask -band 8) -and $Enabled)
-    & (Join-Path $binaries 'bootstrap-selection.exe') $caseRoot $diagnostic $dump $substitution $pixel | Out-Null
+    $caseArguments = @($caseRoot, $diagnostic, $dump, $substitution, $pixel)
+    if ($InteropOnly) { $caseArguments = @($caseRoot, '--interop') }
+    & (Join-Path $binaries 'bootstrap-selection.exe') @caseArguments
     if ($LASTEXITCODE -ne 0) { throw "Bootstrap selection failed: mask=$Mask case=$caseRoot" }
 }
-for ($mask = 0; $mask -lt 64; $mask++) { Invoke-StartupCase $mask }
-Invoke-StartupCase 56 'disabled' $false
-Invoke-StartupCase 56 " `tENABLED`r`n" $true
-Invoke-StartupCase 56 ('enabled' + (' ' * 24)) $true
-Invoke-StartupCase 56 ('enabled' + (' ' * 25)) $false
-Invoke-StartupCase 56 'enabled extra' $false
-Write-Output "bootstrap_selection=pass cases=$script:caseCount real_proxy=true game_started=false"
+if ($InteropOnly) {
+    Invoke-StartupCase 0
+} else {
+    for ($mask = 0; $mask -lt 64; $mask++) { Invoke-StartupCase $mask }
+    Invoke-StartupCase 56 'disabled' $false
+    Invoke-StartupCase 56 " `tENABLED`r`n" $true
+    Invoke-StartupCase 56 ('enabled' + (' ' * 24)) $true
+    Invoke-StartupCase 56 ('enabled' + (' ' * 25)) $false
+    Invoke-StartupCase 56 'enabled extra' $false
+}
+$testName = if ($InteropOnly) { 'bootstrap_d3d11on12' } else { 'bootstrap_selection' }
+Write-Output "$testName=pass cases=$script:caseCount real_proxy=true game_started=false"
 # Evidence is only worth keeping for a failing run.
-Remove-Item -LiteralPath $evidenceRoot -Recurse -Force -ErrorAction SilentlyContinue
+$verifiedEvidenceRoot = [IO.Path]::GetFullPath($evidenceRoot)
+$allowedEvidenceParent = [IO.Path]::GetFullPath((Join-Path $repoRoot 'artifacts/unattended')) + [IO.Path]::DirectorySeparatorChar
+if (-not $verifiedEvidenceRoot.StartsWith($allowedEvidenceParent, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Refusing to remove bootstrap test evidence outside its artifact directory.'
+}
+Remove-Item -LiteralPath $verifiedEvidenceRoot -Recurse -Force -ErrorAction SilentlyContinue

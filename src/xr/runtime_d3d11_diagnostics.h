@@ -2,9 +2,12 @@
 #include <iosfwd>
 #include <memory>
 #include <cstdint>
+#include <string_view>
 struct ID3D11Device;
 
 namespace darktidevr::xr {
+bool is_known_runtime_validation_probe(std::string_view runtime,
+                                     std::uint32_t message_id);
 // Opt-in, process-local instrumentation. Keeps captured devices alive until
 // this scope ends; it is deliberately unsuitable for performance measurements.
 class RuntimeD3D11Diagnostics {

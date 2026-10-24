@@ -125,6 +125,12 @@ if(BUILD_TESTING)
   target_link_libraries(darktidevr-panel-renderer-tests PRIVATE
     darktidevr-panel-renderer d3d12 dxgi)
   add_test(NAME panel_renderer COMMAND darktidevr-panel-renderer-tests)
+  add_executable(darktidevr-projection-reprojection-tests projection_reprojection_tests.cpp)
+  target_compile_options(darktidevr-projection-reprojection-tests PRIVATE /W4 /WX /permissive-)
+  target_compile_definitions(darktidevr-projection-reprojection-tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+  target_link_libraries(darktidevr-projection-reprojection-tests PRIVATE darktidevr-panel-renderer d3d12 dxgi)
+  add_test(NAME projection_reprojection COMMAND darktidevr-projection-reprojection-tests)
+  set_tests_properties(projection_reprojection PROPERTIES TIMEOUT 30 LABELS "stereo;offline;d3d12")
   set_tests_properties(panel_renderer PROPERTIES
     LABELS "phase1;openxr;menu;d3d12")
 

@@ -3,9 +3,19 @@ LIBRARY d3d12
 EXPORTS
   D3D12CreateDevice @101
   D3D12GetDebugInterface @102
+  D3D12CoreCreateLayeredDevice=dtvr_forward_core_create @103
+  D3D12CoreGetLayeredDeviceSize=dtvr_forward_core_size @104
+  D3D12CoreRegisterLayers=dtvr_forward_core_register @105
   D3D12CreateRootSignatureDeserializer @106
   D3D12CreateVersionedRootSignatureDeserializer @107
+  D3D12DeviceRemovedExtendedData=dtvr_forward_removed @108
   D3D12EnableExperimentalFeatures @109
   D3D12GetInterface @110
+  D3D12PIXEventsReplaceBlock=dtvr_forward_pix_replace @111
+  D3D12PIXGetThreadInfo=dtvr_forward_pix_thread @112
+  D3D12PIXNotifyWakeFromFenceSignal=dtvr_forward_pix_wake @113
+  D3D12PIXReportCounter=dtvr_forward_pix_counter @114
   D3D12SerializeRootSignature @115
   D3D12SerializeVersionedRootSignature @116
+  GetBehaviorValue=dtvr_forward_behavior
+  SetAppCompatStringPointer=dtvr_forward_appcompat

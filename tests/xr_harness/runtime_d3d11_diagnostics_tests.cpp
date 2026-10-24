@@ -2,6 +2,8 @@
 #include <Windows.h>
 #include <d3d11.h>
 #include <d3d11sdklayers.h>
+#include <d3d12.h>
+#include <d3d12sdklayers.h>
 #include <wrl/client.h>
 #include <iostream>
 #include <sstream>
@@ -18,6 +20,14 @@ ComPtr<ID3D11Device> create() {
 }
 int main() {
   try {
+    expect(is_known_runtime_validation_probe("SteamVR/OpenXR",
+        D3D12_MESSAGE_ID_REFLECTSHAREDPROPERTIES_INVALIDOBJECT));
+    expect(!is_known_runtime_validation_probe("VirtualDesktopXR",
+        D3D12_MESSAGE_ID_REFLECTSHAREDPROPERTIES_INVALIDOBJECT));
+    expect(!is_known_runtime_validation_probe("",
+        D3D12_MESSAGE_ID_REFLECTSHAREDPROPERTIES_INVALIDOBJECT));
+    expect(!is_known_runtime_validation_probe("SteamVR/OpenXR",
+        D3D12_MESSAGE_ID_RESOURCE_BARRIER_BEFORE_AFTER_MISMATCH));
     std::ostringstream before;
     report_runtime_d3d11_diagnostics(before); expect(before.str().empty());
     { RuntimeD3D11Diagnostics disabled(false); expect(!(create()->GetCreationFlags()&D3D11_CREATE_DEVICE_DEBUG)); }

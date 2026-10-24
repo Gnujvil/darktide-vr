@@ -30,11 +30,13 @@ set_target_properties(darktidevr_winmm_bootstrap PROPERTIES
 
 endif()
 
+enable_language(ASM_MASM)
 add_library(darktidevr_d3d12_bootstrap SHARED
   d3d12_bootstrap.cpp
+  d3d12_forwarders.asm
   d3d12_bootstrap.def)
 target_compile_options(darktidevr_d3d12_bootstrap PRIVATE
-  /W4 /WX /permissive-)
+  "$<$<COMPILE_LANGUAGE:CXX>:/W4;/WX;/permissive->")
 target_compile_definitions(darktidevr_d3d12_bootstrap PRIVATE
   NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
 set_target_properties(darktidevr_d3d12_bootstrap PROPERTIES

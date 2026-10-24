@@ -2,6 +2,8 @@
 #include <Windows.h>
 #include <d3d11.h>
 #include <d3d11sdklayers.h>
+#include <d3d12.h>
+#include <d3d12sdklayers.h>
 #include <dxgi1_2.h>
 #include <wrl/client.h>
 #include <MinHook.h>
@@ -17,6 +19,14 @@
 #include <vector>
 
 namespace darktidevr::xr {
+bool is_known_runtime_validation_probe(std::string_view runtime,
+                                     std::uint32_t message_id) {
+  // SteamVR's D3D11On12 capability probe emits this SDK error even when
+  // wrapping succeeds. Valve confirms it is benign; no other error is exempt.
+  // https://github.com/ValveSoftware/openvr/issues/1134#issuecomment-562606742
+  return runtime == "SteamVR/OpenXR" &&
+         message_id == D3D12_MESSAGE_ID_REFLECTSHAREDPROPERTIES_INVALIDOBJECT;
+}
 namespace {
 using Microsoft::WRL::ComPtr;
 struct Record {

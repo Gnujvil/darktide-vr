@@ -47,6 +47,7 @@ cbuffer PanelConstants : register(b0) {
   float4 uv_rect;
   float2 quad_size;
   float2 half_texel;
+  float opaque_source;
 };
 Texture2D source_texture : register(t0);
 SamplerState linear_clamp : register(s0);
@@ -80,6 +81,7 @@ float4 ps_main(VSOutput input) : SV_Target {
   float2 width = max(fwidth(input.corner), 1.0e-6);
   float2 distance = min(input.corner, 1.0 - input.corner) / width;
   float coverage = saturate(min(distance.x, distance.y) + 0.5);
+  if (opaque_source > 0.5) color.a = 1.0;
   return color * coverage;
 }
 )";
@@ -323,7 +325,8 @@ std::uint32_t PanelRenderer::record(
     ID3D12GraphicsCommandList* command_list,
     D3D12_CPU_DESCRIPTOR_HANDLE render_target, const XrRect2Di& image_rect,
     std::size_t eye, const XrPosef& eye_pose, const XrFovf& fov,
-    const PanelQuad* quads, std::size_t quad_count, bool clear_transparent) {
+    const PanelQuad* quads, std::size_t quad_count, bool clear_transparent,
+    bool opaque_source) {
   const D3D12_VIEWPORT viewport{
       static_cast<float>(image_rect.offset.x),
       static_cast<float>(image_rect.offset.y),
@@ -353,6 +356,7 @@ std::uint32_t PanelRenderer::record(
     }
     const auto& extent = texture_extent_[source];
     Constants constants{};
+    constants.opaque_source = opaque_source ? 1.0F : 0.0F;
     const auto model = math::pose_matrix(to_pose(quad.pose));
     std::copy(view_projection.m.begin(), view_projection.m.end(),
               constants.view_projection);

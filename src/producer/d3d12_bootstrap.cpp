@@ -417,6 +417,18 @@ DTVR_FORWARD_HRESULT(D3D12GetInterface,
 
 #undef DTVR_FORWARD_HRESULT
 
+// The internal D3D12/PIX ABI is not part of the SDK headers. Preserve it with
+// assembly tail calls instead of inventing C++ prototypes. Resolve lazily so
+// loading this proxy does not load another DLL under the loader lock.
+extern "C" FARPROC WINAPI dtvr_resolve_d3d12_export(const char* name) {
+  const auto function = resolve_real<FARPROC>(name);
+  if (!function) {
+    RaiseFailFastException(nullptr, nullptr, 0);
+    TerminateProcess(GetCurrentProcess(), ERROR_PROC_NOT_FOUND);
+  }
+  return function;
+}
+
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
   if (reason == DLL_PROCESS_ATTACH) {
     proxy_module = instance;

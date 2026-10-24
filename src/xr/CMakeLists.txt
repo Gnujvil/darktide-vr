@@ -48,7 +48,7 @@ target_link_libraries(darktidevr-tracked-cuff-renderer PUBLIC
   OpenXR::openxr_loader darktidevr-tracked-cuff darktidevr_core
   d3d12 d3dcompiler dxgi)
 
-add_library(darktidevr-panel-renderer STATIC panel_renderer.cpp)
+add_library(darktidevr-panel-renderer STATIC panel_renderer.cpp projection_reprojection.cpp)
 target_include_directories(darktidevr-panel-renderer PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(darktidevr-panel-renderer PRIVATE

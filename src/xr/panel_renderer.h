@@ -85,7 +85,7 @@ class PanelRenderer {
                        const XrRect2Di& image_rect, std::size_t eye,
                        const XrPosef& eye_pose, const XrFovf& fov,
                        const PanelQuad* quads, std::size_t quad_count,
-                       bool clear_transparent);
+                       bool clear_transparent, bool opaque_source = false);
   void end(ID3D12GraphicsCommandList* command_list);
 
  private:
@@ -95,6 +95,7 @@ class PanelRenderer {
     float uv_rect[4];
     float size[2];
     float half_texel[2];
+    float opaque_source;
   };
 
   Microsoft::WRL::ComPtr<ID3D12RootSignature> root_signature_;

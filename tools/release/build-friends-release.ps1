@@ -41,10 +41,12 @@ try {
     if ($LASTEXITCODE) { throw 'Native configure failed.' }
     $targets = @('darktidevr_native_capture', 'darktidevr_d3d12_bootstrap', 'darktidevr-xr-harness',
         'darktidevr-frame-delivery-tests', 'darktidevr-viewer-process-tests',
-        'darktidevr-native-original-ring-tests', 'darktidevr-shared-head-pose-tests')
+        'darktidevr-native-original-ring-tests', 'darktidevr-shared-head-pose-tests',
+        'darktidevr-bootstrap-selection-tests', 'darktidevr-runtime-d3d11-diagnostics-tests',
+        'darktidevr-projection-reprojection-tests', 'darktidevr-panel-renderer-tests')
     & cmake --build build/windows-vs2022 --config Release --target @targets --parallel 2
     if ($LASTEXITCODE) { throw 'Native build failed.' }
-    & ctest --test-dir build/windows-vs2022 -C Release --output-on-failure -R '^(frame_delivery|viewer_process_identity|native_original_ring|shared_head_pose)$'
+    & ctest --test-dir build/windows-vs2022 -C Release --output-on-failure -R '^(frame_delivery|viewer_process_identity|native_original_ring|shared_head_pose|bootstrap_d3d11on12|runtime_d3d11_diagnostics|projection_reprojection|panel_renderer)$'
     if ($LASTEXITCODE) { throw 'Frame-delivery regression checks failed.' }
     & tools/stereo/build-melee-inertia.ps1
     & tools/stereo/build-particle-horizon-lock.ps1 -DxcPath (Join-Path $compiler 'dxc.exe')
