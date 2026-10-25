@@ -590,6 +590,30 @@ try {
         $app.binary_path_windows -eq $stableExe -and $app.arguments -eq '--vr-launch') (Get-Content -Raw $vrManifestPath)
     Invoke-Launcher $L1 (@('--cli', 'steam-remove') + $steamArgs) | Out-Null
 
+    # Support zip: SteamVR's own logs show which app it gave the headset and
+    # what its compositor showed (Bimo's black screen, 25 October).
+    New-Item -ItemType Directory -Path (Join-Path $steam 'logs') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $steam 'logs\vrserver.txt') -Value 'vrserver current' -Encoding ascii
+    Set-Content -LiteralPath (Join-Path $steam 'logs\vrcompositor.previous.txt') -Value 'compositor previous' -Encoding ascii
+    $r = Invoke-Launcher $L1 (@('--cli', 'support-zip') + $steamArgs)
+    $supportZip = Value $r 'support_zip'
+    $entries = @{}
+    if ($supportZip -and (Test-Path -LiteralPath $supportZip)) {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $archive = [IO.Compression.ZipFile]::OpenRead($supportZip)
+        try {
+            foreach ($entry in $archive.Entries) {
+                $reader = New-Object IO.StreamReader($entry.Open())
+                try { $entries[$entry.FullName] = $reader.ReadToEnd().Trim() } finally { $reader.Dispose() }
+            }
+        } finally { $archive.Dispose() }
+        Remove-Item -LiteralPath $supportZip -Force
+    }
+    Check 'support zip: SteamVR server and compositor logs included' ($r.ExitCode -eq 0 -and
+        $entries['steamvr/vrserver.txt'] -eq 'vrserver current' -and
+        $entries['steamvr/vrcompositor.previous.txt'] -eq 'compositor previous' -and
+        -not $entries.ContainsKey('steamvr/vrcompositor.txt')) "$($r.Output)$($r.Error) entries=$(@($entries.Keys) -join ',')"
+
     # The launch decision without asking any runtime.
     $marker = Join-Path $script:LocalAppData 'DarktideVR\launcher\next-launch.txt'
     $r = Invoke-Launcher $L1 (@('--cli', 'decide', '--steam-launch-mode', 'flat') + $gameArgs)

@@ -510,6 +510,12 @@ namespace DarktideVR.Launcher.Core
                 // no settings files.
                 AddNewest(zip, Paths.DataRoot, "viewer-*.log", 3, "viewer");
                 AddNewest(zip, Path.Combine(Paths.RoamingAppData, "Fatshark", "Darktide", "console_logs"), "*.log", 2, "console_logs");
+                // SteamVR's own logs: which app it gave the headset and what
+                // its compositor showed.
+                var steam = GameLocator.SteamRoot();
+                if (steam != null)
+                    foreach (var name in new[] { "vrserver.txt", "vrserver.previous.txt", "vrcompositor.txt", "vrcompositor.previous.txt" })
+                        AddIfExists(zip, Path.Combine(steam, "logs", name), "steamvr/" + name);
             }
             Log.Info($"Support zip written: {path}");
             return path;
