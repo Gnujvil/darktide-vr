@@ -820,9 +820,10 @@ local function run_case(id,arguments)
             emit=function(kind,data)
                 if kind=="stroke" then
                     run.strokes_committed=(run.strokes_committed or 0)+1
-                    event("stroke",string.format("id=%d interval=%.6f action=%s source=%s intent_hand=%s authority=%s walk=%s hand=%s cos=%s ratio=%s stride_match=%s",
+                    event("stroke",string.format("id=%d interval=%.6f action=%s source=%s intent_hand=%s authority=%s walk=%s hand=%s cos=%s ratio=%s stride_match=%s hand_travel=%s",
                         data.id,data.interval,data.action,data.source,tostring(data.intent_hand),tostring(data.authority),
-                        tostring(data.walk),tostring(data.hand),tostring(data.cos),tostring(data.ratio),tostring(data.stride_match)))
+                        tostring(data.walk),tostring(data.hand),tostring(data.cos),tostring(data.ratio),tostring(data.stride_match),
+                        tostring(data.hand_travel)))
                 elseif kind=="stroke_filtered" then
                     event(kind,string.format("id=%s reason=%s walk=%s hand=%s cos=%s ratio=%s",tostring(data.id),tostring(data.reason),
                         tostring(data.walk),tostring(data.hand),tostring(data.cos),tostring(data.ratio)))

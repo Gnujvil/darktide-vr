@@ -21,7 +21,12 @@ function Strokes.new(options)
         stop_speed=options.stop_speed or .35,settle=options.settle or .06,
         max_active=options.max_active or .6,max_gap=options.max_gap or .1,
         min_travel=options.min_travel or .12,min_raw_travel=options.min_raw_travel or .1,min_duration=options.min_duration or .03,
-        fast_speed=options.fast_speed or 1.8}
+        fast_speed=options.fast_speed or 1.8,
+        -- The hand itself must travel (request.hand_point: the controller's
+        -- grip position, not the weapon tip a metre out, which a few degrees
+        -- of wrist turn moves 10-20 cm). Worn 25 October: unintended swings
+        -- had the hand at a median 0.25 m/s, real ones 1.5 m/s.
+        hand_travel=options.hand_travel or .06,hand_speed=options.hand_speed or .6}
     for _,n in pairs(config) do assert(finite(n) and n>0,"invalid stroke configuration") end
     assert(config.coherence<=1 and config.stop_speed<config.speed,"invalid stroke thresholds")
     local state={debt=0,serial=0,phase="settling"}
@@ -54,7 +59,7 @@ function Strokes.new(options)
             trajectory=state.active and state.active.trajectory,
             onset=state.active and state.active.onset or ended_stroke() and state.ended.onset or nil,
             ended=ended_stroke()~=nil,last_reset=state.last_reset,last_reset_at=state.last_reset_at,
-            dropped=state.dropped}
+            dropped=state.dropped,hand_travel=state.active and state.active.hand_travel or nil}
     end
     function api.update(request)
         request=request or {}
@@ -87,6 +92,9 @@ function Strokes.new(options)
         local point=request.point
         local raw=request.raw_point
         local support=request.raw_support_point
+        local function finite_point(v) return type(v)=="table" and finite(v[1]) and finite(v[2]) and finite(v[3]) and v or nil end
+        local hand_point=finite_point(request.hand_point)
+        local support_hand_point=finite_point(request.support_hand_point)
         local valid=request.tracking_valid==true and request.reference~=nil and
             request.weapon~=nil and request.mode~=nil and finite(request.interval) and request.interval>0 and
             type(point)=="table" and finite(point[1]) and finite(point[2]) and finite(point[3]) and
@@ -152,7 +160,8 @@ function Strokes.new(options)
                 support_origin=support and {support[1]-support_movement[1],support[2]-support_movement[2],support[3]-support_movement[3]},
                 support_path=support_distance,
                 trajectory={{point[1]-movement[1],point[2]-movement[2],point[3]-movement[3]},copy(point)},
-                start=time-dt,path=distance,allowed=ready}
+                start=time-dt,path=distance,allowed=ready,
+                hand_origin=hand_point and copy(hand_point),support_hand_origin=support_hand_point and copy(support_hand_point)}
         end
         local restart_candidate=candidate
         -- A motion begun during recovery counts from the sample where the
@@ -162,6 +171,8 @@ function Strokes.new(options)
             value.origin=copy(point); value.raw_origin=copy(raw); value.raw_path=0
             value.support_origin=support and copy(support); value.support_path=0
             value.trajectory={copy(point)}; value.start=time; value.path=0; value.allowed=true
+            value.hand_origin=hand_point and copy(hand_point)
+            value.support_hand_origin=support_hand_point and copy(support_hand_point)
         end
         -- A sharp turn or a stop separates swings; the next one may start in
         -- any new direction at least 60 degrees from the last, not only back.
@@ -250,6 +261,14 @@ function Strokes.new(options)
             local dominant_qualified=raw_travel>=need_raw and raw_travel/math.max(candidate.raw_path,1e-12)>=config.coherence
             local support_qualified=support_travel>=need_raw and support_travel/math.max(candidate.support_path,1e-12)>=config.coherence
             local raw_qualified=dominant_qualified or support_qualified
+            -- The hand's own travel since the motion began, at a real arm's
+            -- pace: a wrist turn swings the tip but barely moves the grip. A
+            -- motion whose tip qualifies first waits for its hand.
+            local elapsed=math.max(time-candidate.start,1e-6)
+            local function moved(origin,now) return origin and now and length(delta(now,origin)) or 0 end
+            local hand_moved=math.max(moved(candidate.hand_origin,hand_point),moved(candidate.support_hand_origin,support_hand_point))
+            local hand_qualified=not candidate.hand_origin or
+                hand_moved>=config.hand_travel and hand_moved/elapsed>=config.hand_speed
             if speed<config.stop_speed or coherent<config.coherence then
                 -- Why a real motion did not become a stroke (diagnostics).
                 local restart=speed>=config.stop_speed
@@ -267,7 +286,7 @@ function Strokes.new(options)
                     state.candidate=nil; state.phase="spent"; state.quiet=0
                     state.spent_direction=direction or state.spent_direction
                 end
-            elseif travel>=need_travel and raw_qualified and
+            elseif travel>=need_travel and raw_qualified and hand_qualified and
                     time-candidate.start>=need_duration and speed>=config.speed and
                     (candidate.allowed or not candidate.reported) then
                 if candidate.allowed then
@@ -277,7 +296,7 @@ function Strokes.new(options)
                     -- stroke commits only after it has travelled, so the
                     -- runtime queries the path back to here once native binds.
                     state.active={start=time,onset=candidate.start,direction=unit(net,travel),targets={},
-                        trajectory=candidate.trajectory,
+                        trajectory=candidate.trajectory,hand_travel=candidate.hand_origin and hand_moved or nil,
                         intent_hand=dominant_qualified and (support_qualified and "both" or "dominant") or "support"}
                     state.phase="active"; committed=true
                 else

@@ -267,6 +267,20 @@ def scenarios():
         "  step: touch_barely.tsv|close-anchored|gesture|auto|<name>",
     ])
 
+    # Wrist turns with the hand still (worn 25 October: the tip, a metre out,
+    # swung by a few degrees of wrist while the grip barely moved).
+    lines = []
+    t = 0.0
+    while t <= 4.0 + 1e-9:
+        a = math.radians(20) * math.sin(2 * math.pi * 2.5 * (t - 0.5)) if 0.5 <= t <= 3.5 else 0.0
+        lines.append(f"{t:.3f} {LEFT} 0.0000 {RIGHT_Y} {RIGHT_Z} 0 0 {math.sin(a / 2):.6f} {math.cos(a / 2):.6f} 0 0 0 0 0")
+        t = round(t + STEP, 3)
+    out["touch_wrist_turn.tsv"] = "\n".join(["# grip=touch",
+        "# Wrist turns, hand still: the grip yaws +-20 degrees at 2.5 Hz from 0.5 s to 3.5 s",
+        "# (the tip of a 1 m weapon then sweeps about 35 cm each way at up to 5 m/s). Against a",
+        "# close target, expect no strokes: the hand itself must travel 6 cm at 0.6 m/s.",
+        "#   step: touch_wrist_turn.tsv|close-anchored|gesture|auto|<name>", HEADER] + lines) + "\n"
+
     end = 0.35 + 8 * SWING
     moving("touch_move_walk.tsv", [(0.5, 0, 0.35, end, False)], [
         "touch_continuous walking forward at half stick (a far target, 4 m, comes into reach).",

@@ -414,7 +414,10 @@ function Runtime.new(deps,options)
             return result
         end
         track_hands(request)
+        -- The grips themselves, for the stroke's hand-travel gate (see Strokes).
+        local function grip(pose) return pose and pose.position and {pose.position[1],pose.position[2],pose.position[3]} or nil end
         local status=strokes.update({point=tip(virtual,offset),raw_point=tip(request.dominant,offset),
+            hand_point=grip(request.dominant),support_hand_point=virtual.support_engaged and grip(request.support) or nil,
             raw_support_point=virtual.support_engaged and request.support and tip(request.support,offset) or nil,
             time=request.time,frame=request.frame,interval=interval,weapon=options.weapon,mode="physical",
             reference=state.pose_epoch,tracking_valid=true,
@@ -500,7 +503,8 @@ function Runtime.new(deps,options)
             if charged and not arming then state.heavy=nil; state.pulse=nil; state.release=request.frame end
             if following then state.pulse=nil end
             emit("stroke",motion_fields({id=status.stroke_id,interval=interval,action=state.committed_action,intent_hand=status.intent_hand,
-                time=request.time,source=options.source,authority=stock and "stock" or "physical"}))
+                time=request.time,source=options.source,authority=stock and "stock" or "physical",
+                hand_travel=status.hand_travel and string.format("%.3f",status.hand_travel) or nil}))
             if arming then
                 local path=status.trajectory
                 local direction=type(path)=="table" and #path>=2 and

@@ -185,6 +185,28 @@ do
     assert(commits_for(.013,7,.01,nil,true)==0,'an enemy ahead let a small slow motion count')
     -- A short real swing: 15 cm at 3 m/s still counts.
     assert(commits_for(.03,5)==1,'a short real swing was lost')
+    -- The hand itself must travel (worn 25 October: wrist turns swung the
+    -- tip a metre out while the hand moved 0.25 m/s). hand(i) is the grip.
+    local function with_hand(tip_step,hand_of,steps)
+        local owner,request,step,settle,swing,count=fixture()
+        request.hand_point={0,0,0}; settle()
+        local committed_at,travel
+        for i=1,steps do
+            request.hand_point={hand_of(i),0,0}
+            step(tip_step*i)
+            if count()>0 and not committed_at then committed_at=i; travel=owner.status().hand_travel end
+        end
+        settle(20)
+        return count(),committed_at,travel
+    end
+    -- A wrist turn: the tip sweeps 30 cm at 2 m/s, the grip moves 1.5 cm.
+    assert(with_hand(.02,function(i) return .001*i end,15)==0,'a wrist turn counted as a swing')
+    -- A real swing: the grip travels with the tip (half its speed).
+    local n,at,travel=with_hand(.02,function(i) return .01*i end,20)
+    assert(n==1 and travel and travel>=.06,'a real swing with the hand moving was lost or did not report its hand travel')
+    -- The tip qualifies first and the hand catches up: it waits, then counts.
+    local late=with_hand(.02,function(i) return i<6 and .002*i or .012*(i-5)+.01 end,20)
+    assert(late==1,'a swing whose hand moved after its tip was lost')
     -- A small back-and-forth jiggle (6 cm each way at 2 m/s) never counts.
     local owner,request,step,settle,swing,count=fixture()
     settle()
