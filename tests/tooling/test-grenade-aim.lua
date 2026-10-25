@@ -2,8 +2,9 @@
 local root="scripts/extension_systems/weapon/actions/"
 local effects_path="scripts/extension_systems/visual_loadout/wieldable_slot_scripts/aim_projectile_effects"
 local luggable_effects_path="scripts/extension_systems/visual_loadout/wieldable_slot_scripts/aim_luggable_effects"
+local ads_effects_path="scripts/extension_systems/visual_loadout/wieldable_slot_scripts/aim_projectile_ads_effects"
 local classes={[root.."action_aim_projectile"]={},[root.."action_throw_grenade"]={},
-    [effects_path]={},[luggable_effects_path]={}}
+    [effects_path]={},[luggable_effects_path]={},[ads_effects_path]={}}
 local action_utility={current_action_settings_from_component=function(component,actions)
     return actions[component.current_action_name]
 end}
@@ -34,6 +35,7 @@ local aim_hook=hooks[classes[root.."action_aim_projectile"]].fixed_update
 local throw_hook=hooks[classes[root.."action_throw_grenade"]]._spawn_projectile
 local preview_hook=hooks[classes[effects_path]]._update_trajectory
 local luggable_preview_hook=hooks[classes[luggable_effects_path]]._update_trajectory
+local ads_preview_hook=hooks[classes[ads_effects_path]]._update_trajectory
 local template={keywords={"other","grenade"}}
 local settings={kind="aim_projectile",throw_type="throw"}
 local original=setmetatable({}, {__index={position=1,rotation=2,unchanged=33},
@@ -143,4 +145,26 @@ effect._is_local_unit=false; preview_hook(fallback,effect,trajectory); effect._i
 ok,err=pcall(preview_hook,function() error('online preview error') end,effect,trajectory)
 assert(not ok and tostring(err):find('online preview error',1,true))
 assert(Unit.world_position==old_position and Unit.world_rotation==old_rotation)
-print("grenade aim/throw/preview ownership, fallback and restoration passed")
+-- The Ogryn Rumbler's aim-down-sights arc (its own concrete class, which
+-- copied the inherited method) takes the simulated pose too, for a weapon with
+-- a projectile arc whatever its current action; nothing else is redirected.
+local rumbler={name="ogryn_thumper_p1_m2",keywords={"ogryn","thumper"},
+    alternate_fire_settings={projectile_aim_effect_settings={throw_type="shoot",projectile_template={}}}}
+local ads={_is_local_unit=true,_first_person_unit="fp",_weapon_template=rumbler,
+    _weapon_action_component={current_action_name="zoom"},_weapon_actions={zoom={kind="aim"}}}
+ads_preview_hook(simulated_arc,ads,trajectory)
+assert(Unit.world_position==old_position and Unit.world_rotation==old_rotation)
+simulated_preview=false; available=true
+ads_preview_hook(arc,ads,trajectory,0.01,42)
+assert(Unit.world_position==old_position and Unit.world_rotation==old_rotation)
+assert(grenade.ads_supported(rumbler) and not grenade.ads_supported(template))
+assert(not grenade.ads_supported({alternate_fire_settings={projectile_aim_effect_settings={}}}),
+    'an empty arc table (Rumbler m1/m3) counted as an arc')
+ads._weapon_template={alternate_fire_settings={projectile_aim_effect_settings={}}}
+ads_preview_hook(fallback,ads,trajectory)
+ads._weapon_template=rumbler; ads._is_local_unit=false; ads_preview_hook(fallback,ads,trajectory); ads._is_local_unit=true
+available=false; ads_preview_hook(fallback,ads,trajectory); available=true
+-- The thrown-grenade arc class does not take a Rumbler on its arc table alone.
+effect._weapon_template=rumbler; effect._weapon_action_component.current_action_name='aim'
+preview_hook(fallback,effect,trajectory)
+print("grenade aim/throw/preview ownership, fallback and restoration passed; rumbler ads arc")

@@ -19,6 +19,17 @@ function Grenade.supported(template,settings)
     return false
 end
 
+-- The arc drawn while aiming down the sights of a projectile gun (the Ogryn
+-- Rumbler: alternate_fire_settings.projectile_aim_effect_settings, drawn by
+-- AimProjectileAdsEffects). Its grenade leaves from the simulated aim like a
+-- thrown one, so its arc takes the same pose (user, 25 October: the Rumbler's
+-- arc did not follow the hand).
+function Grenade.ads_supported(template)
+    local alternate=template and template.alternate_fire_settings
+    local arc=type(alternate)=="table" and alternate.projectile_aim_effect_settings
+    return type(arc)=="table" and arc.projectile_template~=nil
+end
+
 function Grenade.install(mod,aim,simulation_preview_pose)
     -- Inherited methods are copied into concrete Stingray classes. Load both
     -- before hooking, then patch the concrete luggable preview as well.
@@ -26,6 +37,7 @@ function Grenade.install(mod,aim,simulation_preview_pose)
         require("scripts/extension_systems/visual_loadout/wieldable_slot_scripts/aim_projectile_effects"),
         require("scripts/extension_systems/visual_loadout/wieldable_slot_scripts/aim_luggable_effects"),
     }
+    local ads_effects=require("scripts/extension_systems/visual_loadout/wieldable_slot_scripts/aim_projectile_ads_effects")
     local function action_pose(func,self,...)
         local player=Managers and Managers.player and Managers.player:local_player(1)
         if not player or player.player_unit~=self._player_unit or
@@ -47,14 +59,7 @@ function Grenade.install(mod,aim,simulation_preview_pose)
     mod:hook(require("scripts/extension_systems/weapon/actions/action_throw_grenade"),
         "_spawn_projectile",action_pose)
 
-    local function trajectory_pose(func,self,settings,...)
-            local component,actions=self._weapon_action_component,self._weapon_actions
-            local action_settings=component and actions and
-                Action.current_action_settings_from_component(component,actions)
-            if not self._is_local_unit or not self._first_person_unit or not settings or
-                    not Grenade.supported(self._weapon_template,action_settings) then
-                return func(self,settings,...)
-            end
+    local function redirected(func,self,settings,...)
             -- Online-rules actions keep their stock simulation components.
             -- Their rendered first-person root still follows the head, so the
             -- visual arc needs the simulated pose independently of hand proxies.
@@ -86,7 +91,27 @@ function Grenade.install(mod,aim,simulation_preview_pose)
             if not result[1] then error(result[2],0) end
             return unpack(result,2,result.n)
     end
+    local function trajectory_pose(func,self,settings,...)
+        local component,actions=self._weapon_action_component,self._weapon_actions
+        local action_settings=component and actions and
+            Action.current_action_settings_from_component(component,actions)
+        if not self._is_local_unit or not self._first_person_unit or not settings or
+                not Grenade.supported(self._weapon_template,action_settings) then
+            return func(self,settings,...)
+        end
+        return redirected(func,self,settings,...)
+    end
+    local function ads_trajectory_pose(func,self,settings,...)
+        if not self._is_local_unit or not self._first_person_unit or not settings or
+                not Grenade.ads_supported(self._weapon_template) then
+            return func(self,settings,...)
+        end
+        return redirected(func,self,settings,...)
+    end
     for _,class in ipairs(effects) do mod:hook(class,"_update_trajectory",trajectory_pose) end
+    -- The aim-down-sights arc class copied the inherited method when it was
+    -- defined, so the hook above never reaches it: hook it as well.
+    mod:hook(ads_effects,"_update_trajectory",ads_trajectory_pose)
 end
 
 return Grenade
