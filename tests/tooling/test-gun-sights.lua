@@ -58,12 +58,18 @@ local reticle_fresh=true
 presentation.controller_aim.cached_reticle_target=function()
     if reticle_fresh then return presentation.controller_aim.reticle_world_point end
 end
+-- The adapter checks use the shipped eye alone, without recorded lines.
+local recorded_lines=Sights.SIGHT_LINES
+Sights.SIGHT_LINES={}
 local api=Sights.install({info=function(_,f,...) lines[#lines+1]=string.format(f,...) end},presentation)
 local out=api.drawn_rotation(unit,'galvanic_rifle_p1_m1',{0,0,0},identity,1/90)
 for i=1,4 do near(out[i],identity[i],1e-12,'no grip measured yet: unchanged') end
 Matrix4x4={inverse=function(m) return m end,transform=function(m,p) return {p[1]-m[1],p[2]-m[2],p[3]-m[3]} end}
 api.observe_grip('galvanic_rifle_p1_m1',{0,1.153,.086},{-.007,0,0})
-assert(lines[1]:find('grip template=galvanic_rifle_p1_m1',1,true))
+local function logged(text)
+    for _,line in ipairs(lines) do if line:find(text,1,true) then return true end end
+end
+assert(logged('grip template=galvanic_rifle_p1_m1'),'grip logged')
 local first=api.drawn_rotation(unit,'galvanic_rifle_p1_m1',{0,0,0},identity,1/90)
 assert(first[1]~=0,'correction starts')
 for _=1,60 do out=api.drawn_rotation(unit,'galvanic_rifle_p1_m1',{0,0,0},identity,1/90) end
@@ -146,7 +152,9 @@ Quaternion.rotate=rot
 Quaternion.forward=function(q) return rot(q,{0,1,0}) end
 Vector3.distance=function(a,b) return math.sqrt((a[1]-b[1])^2+(a[2]-b[2])^2+(a[3]-b[3])^2) end
 local muzzle_1p,camera_unit={},{}
-local rig={muzzle={10,20,1.5},camera={10,19.5,1.565},node=7,fx_muzzle='fx_muzzle',first_person_mode=false}
+-- The rig's root stays at the head, 4 cm under its animated camera node.
+local rig={muzzle={10,20,1.5},camera={10,19.5,1.565},root={10,19.5,1.525},camera_node=true,
+    node=7,fx_muzzle='fx_muzzle',first_person_mode=false}
 local extensions={
     unit_data_system={read_component=function(_,name)
         if name=='alternate_fire' then return {is_active=true} end
@@ -160,12 +168,16 @@ local extensions={
         is_in_first_person_mode=function() return rig.first_person_mode end}}
 ScriptUnit={has_extension=function(_,name) return extensions[name] end}
 Unit={world_pose=function(u) assert(u==muzzle_1p); return rig.muzzle end,
-    world_position=function(u) assert(u==camera_unit); return rig.camera end,
+    has_node=function(u,name) return u==camera_unit and name=='ap_camera_node' and rig.camera_node end,
+    node=function(u,name) assert(u==camera_unit and name=='ap_camera_node'); return 3 end,
+    world_position=function(u,node) assert(u==camera_unit); return node==3 and rig.camera or rig.root end,
     world_rotation=function() return identity end}
 local function measuring(eye_pose)
     local measured_lines={}
     local measured_api=Sights.install({info=function(_,f,...) measured_lines[#measured_lines+1]=string.format(f,...) end},
         {gun_aim={is_gun=function() return true end},eye_pose=eye_pose})
+    -- Only what the measurement logs: the recorded lines' install lines aside.
+    for i=#measured_lines,1,-1 do measured_lines[i]=nil end
     return measured_api,measured_lines
 end
 local function count(list,text)
@@ -173,14 +185,84 @@ local function count(list,text)
     for _,line in ipairs(list) do if line:find(text,1,true) then n=n+1 end end
     return n
 end
--- Stock ADS: the hidden rig's camera sits behind the sights.
+-- Stock ADS: the hidden rig's camera node sits behind the sights (its root,
+-- 4 cm lower, would put the eye under them).
 local m_api,m_lines=measuring()
 m_api.update(unit,0); m_api.update(unit,.5)
 assert(#m_lines==0 and not m_api.eyes.shotgun_p4_m1,'nothing before the ADS settles')
-m_api.update(unit,1)
+for i=1,Sights.EYE_SAMPLES-1 do m_api.update(unit,1+i*.01) end
+assert(not m_api.eyes.shotgun_p4_m1,'eye taken before the samples were averaged')
+m_api.update(unit,2)
 local eye=assert(m_api.eyes.shotgun_p4_m1,'stock ADS eye measured')
 near(eye.x,0,1e-9); near(eye.z,.065,1e-9); assert(eye.source=='measured')
 assert(count(m_lines,'eye template=shotgun_p4_m1 eye_in_muzzle=0.0000,0.0650')==1,'measured eye logged')
+assert(count(m_lines,'samples='..Sights.EYE_SAMPLES..' spread_mm=0.0')==1,'sample count and spread logged')
+-- The aim animation still swaying (the camera 1 cm up and down every other
+-- frame, worn 25 October: the bolter's line moved 7 mm between sessions):
+-- nothing is taken until the samples settle, and then their mean is.
+do
+    local sway_api,sway_lines=measuring()
+    sway_api.update(unit,0)
+    for i=1,2*Sights.EYE_SAMPLES do
+        rig.camera={10,19.5,1.565+(i%2==0 and .01 or -.01)}
+        sway_api.update(unit,1+i*.01)
+    end
+    assert(not sway_api.eyes.shotgun_p4_m1,'a swaying sight line was taken')
+    assert(count(sway_lines,'eye_skipped template=shotgun_p4_m1 reason=unsteady')==1,'unsteady logged once')
+    for i=1,Sights.EYE_SAMPLES do
+        rig.camera={10,19.5,1.565+(i%2==0 and .001 or -.001)}
+        sway_api.update(unit,3+i*.01)
+    end
+    local steady=assert(sway_api.eyes.shotgun_p4_m1,'settled samples not taken')
+    near(steady.z,.065,1e-3)
+    rig.camera={10,19.5,1.565}
+end
+local mean,spread,angle=Sights.average({{x=0,z=.06,axis={0,1,0}},{x=.002,z=.07,axis={0,1,0}}})
+near(mean.x,.001,1e-12); near(mean.z,.065,1e-12); near(spread,.005,1e-12); near(angle,0,1e-9)
+assert(Sights.average({})==nil)
+-- A line tilted against the muzzle is offset where it passes the grip, which
+-- is 25 cm ahead of the eye; without along positions, as before.
+do
+    local up=Sights.direction(0,2)
+    near(math.deg(math.atan2(up[3],up[2])),2,1e-9); near(up[1],0,1e-12)
+    local d=Sights.direction(1,-2)
+    near(math.deg(math.atan2(d[1],d[2])),1,1e-9); near(math.deg(math.atan2(d[3],d[2])),-2,1e-9)
+    local o=assert(Sights.offset({x=0,y=-.6,z=.1,axis=up},{x=0,y=-.35,z=-.08}))
+    near(o.z,.18+.25*math.tan(math.rad(2)),1e-9,'tilted line taken at the grip')
+    local flat=assert(Sights.offset({x=0,z=.1,axis=up},{x=0,z=-.08})); near(flat.z,.18,1e-12)
+end
+-- A recorded sight line is in use from the start, by template or by family
+-- (every mark of the bolter takes bolter_p1), and the stock ADS measurement
+-- never replaces it.
+Sights.SIGHT_LINES=recorded_lines
+assert(Sights.family('bolter_p1_m2')=='bolter_p1' and Sights.family('ogryn_thumper_p1_m3')=='ogryn_thumper_p1')
+assert(Sights.family('bolter')==nil and Sights.family(nil)==nil)
+do
+    local b_api,b_lines=measuring()
+    Matrix4x4.transform=function(m,p) return {p[1]-m[1],p[2]-m[2],p[3]-m[3]} end
+    b_api.observe_grip('bolter_p1_m2',{0,.3468,.0824},{0,0,0})
+    local o=assert(b_api.sight_offset('bolter_p1_m2'),'bolter mark 2 takes the family line')
+    near(o.z,.0824+.1039+(.642-.3468)*math.tan(math.rad(-.1)),1e-9)
+    assert(b_api.eyes.bolter_p1_m2.source=='sighted')
+end
+do
+    local i_lines={}
+    Sights.install({info=function(_,f,...) i_lines[#i_lines+1]=string.format(f,...) end},{})
+    assert(count(i_lines,'sighted template=bolter_p1 line_in_muzzle=0.0000,0.1039 along=-0.6420')==1,'recorded bolter line logged')
+end
+do
+    Sights.SIGHT_LINES.shotgun_p4_m1={x=0,y=-.5,z=.07,right_degrees=0,up_degrees=-.3}
+    local s_api,s_lines=measuring()
+    s_api.sight_offset('shotgun_p4_m1')
+    local recorded=assert(s_api.eyes.shotgun_p4_m1,'recorded line not taken up')
+    assert(recorded.source=='sighted'); near(recorded.z,.07,1e-12); near(recorded.y,-.5,1e-12)
+    near(math.deg(math.atan2(recorded.axis[3],recorded.axis[2])),-.3,1e-9)
+    s_api.update(unit,0)
+    for i=1,2*Sights.EYE_SAMPLES do s_api.update(unit,1+i*.01) end
+    assert(s_api.eyes.shotgun_p4_m1==recorded,'stock measurement replaced the recorded line')
+    assert(count(s_lines,'eye template=')==0,'recorded gun measured anyway')
+    Sights.SIGHT_LINES.shotgun_p4_m1=nil
+end
 -- The camera far from the sights (head-tracked camera, or a rig left in its
 -- hip pose): rejected, and the numbers that were rejected are logged once.
 rig.camera={10.2,19.6,1.82}
@@ -198,7 +280,12 @@ rig.camera={10,19.5,1.565}; rig.node=nil
 m_api,m_lines=measuring()
 m_api.update(unit,0); m_api.update(unit,1); m_api.update(unit,2)
 assert(count(m_lines,'eye_skipped template=shotgun_p4_m1 reason=no_muzzle_node')==1,'missing 1P muzzle node logged once')
-rig.node=7; rig.fx_muzzle=nil
+rig.node=7; rig.camera_node=false
+m_api,m_lines=measuring()
+m_api.update(unit,0); m_api.update(unit,1); m_api.update(unit,2)
+assert(not m_api.eyes.shotgun_p4_m1,'eye taken from the rig root')
+assert(count(m_lines,'eye_skipped template=shotgun_p4_m1 reason=no_camera_node')==1,'missing camera node logged once')
+rig.camera_node=true; rig.fx_muzzle=nil
 m_api,m_lines=measuring()
 m_api.update(unit,0); m_api.update(unit,1)
 assert(count(m_lines,'eye_skipped template=shotgun_p4_m1 reason=no_muzzle_name')==1,'missing muzzle name logged')

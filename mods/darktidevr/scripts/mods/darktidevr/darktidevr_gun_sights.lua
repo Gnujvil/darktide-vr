@@ -37,7 +37,52 @@ local Sights = {}
 Sights.SHIPPED_EYES = {
     galvanic_rifle_p1_m1 = {x = -0.008, z = 0.032},
 }
+-- Recorded sight lines, by weapon family (template without its mark) or by
+-- template: a point on the line in the muzzle frame (x right, y forward, z
+-- up) and the line's direction, in degrees right of and above the muzzle's
+-- forward. Neither the stock ADS camera nor its live measurement replaces
+-- them (user, 25 October: the rear sight, the front sight and the crosshair
+-- must make one line). Live, the stock line followed the head: the worn
+-- bolter measured 1.43 degrees down, four level-head headless runs 0.07 up.
+Sights.SIGHT_LINES = {
+    -- Rear dots level with the front bead 12.4 mm above the stock ADS eye
+    -- (headless eye-height scan xhair-3c, both dots and the bead fitted over
+    -- the frames), the bead then 0.13 degrees under the crosshair.
+    bolter_p1 = {x = 0, y = -0.642, z = 0.1039, right_degrees = 0, up_degrees = -0.10},
+    -- The stock ADS line with the head level (headless xhair-3e, 30 steady
+    -- samples). Its direction ran through the sights within about 0.2
+    -- degrees where checked by eye (autogun_p1), the eye a few millimetres
+    -- under them. Guns whose stock ADS brings no sight to the eye (braced
+    -- autogun, Lucius shotgun, arc rifle, plasma gun, flamer, autopistol,
+    -- dual pistols, shotpistol and shield) have none; the double-barrel
+    -- shotgun's line, 9 cm beside its muzzle node, is left to measurement.
+    autogun_p1 = {x = 0.0002, y = -0.9128, z = 0.0551, right_degrees = -0.103, up_degrees = 0.672},
+    autogun_p3 = {x = -0.0002, y = -0.9076, z = 0.0549, right_degrees = 0.083, up_degrees = 0.630},
+    lasgun_p1 = {x = -0.0001, y = -0.7937, z = 0.0852, right_degrees = -0.050, up_degrees = -0.007},
+    lasgun_p2 = {x = 0.0001, y = -0.8028, z = 0.0476, right_degrees = -0.138, up_degrees = -0.900},
+    lasgun_p3 = {x = -0.0002, y = -0.7235, z = 0.1049, right_degrees = 0.005, up_degrees = -0.004},
+    shotgun_p1 = {x = 0.0003, y = -0.8208, z = 0.0653, right_degrees = -0.056, up_degrees = -0.081},
+    galvanic_rifle_p1 = {x = -0.0077, y = -1.2004, z = 0.0324, right_degrees = 0.308, up_degrees = 0.346},
+    boltpistol_p1 = {x = 0, y = -0.7459, z = 0.0706, right_degrees = 0.087, up_degrees = -0.120},
+    laspistol_p1 = {x = 0.0008, y = -1.0924, z = 0.0936, right_degrees = -0.058, up_degrees = -0.570},
+    stubrevolver_p1 = {x = -0.0002, y = -0.5764, z = 0.0416, right_degrees = -0.038, up_degrees = 0.157},
+    needlepistol_p1 = {x = -0.0001, y = -0.6768, z = 0.0554, right_degrees = -0.001, up_degrees = -0.034},
+}
+
+-- A weapon template's family: its name without the mark. Pure.
+function Sights.family(name)
+    return type(name) == "string" and name:match("^(.-_p%d+)_m%d+$") or nil
+end
 Sights.ADS_SETTLE_SECONDS = 0.8
+Sights.CAMERA_NODE = "ap_camera_node"
+-- The rear sight, the front sight and the crosshair must make one line from
+-- the eye (user, 25 October). One sample of the stock ADS camera, taken while
+-- the aim animation still sways, put the bolter's line 7 mm and 1.3 degrees
+-- apart in two sessions; the line is the mean of EYE_SAMPLES steady samples,
+-- and samples spread wider than these are not taken.
+Sights.EYE_SAMPLES = 30
+Sights.EYE_MAX_SPREAD = 0.003
+Sights.EYE_MAX_AXIS_SPREAD_DEGREES = 0.3
 Sights.MAX_EYE_OFFSET = 0.15
 Sights.MAX_GRIP_OFFSET = 0.25
 Sights.MIN_POINT_DISTANCE = 0.75
@@ -91,7 +136,22 @@ function Sights.offset(eye, grip)
         not finite(grip.x) or not finite(grip.z) then return nil end
     if math.abs(eye.x) > Sights.MAX_EYE_OFFSET or math.abs(eye.z) > Sights.MAX_EYE_OFFSET or
         math.abs(grip.x) > Sights.MAX_GRIP_OFFSET or math.abs(grip.z) > Sights.MAX_GRIP_OFFSET then return nil end
-    return {x = eye.x - grip.x, z = eye.z - grip.z, axis = Sights.axis(eye.axis)}
+    local axis = Sights.axis(eye.axis)
+    local x, z = eye.x, eye.z
+    -- The offset is taken where the line passes the grip. A line tilted
+    -- against the muzzle climbs between the eye and the grip (the bolter's,
+    -- 25 cm apart, by over a centimetre).
+    if finite(eye.y) and finite(grip.y) then
+        local along = grip.y - eye.y
+        x, z = x + along * axis[1] / axis[2], z + along * axis[3] / axis[2]
+    end
+    return {x = x - grip.x, z = z - grip.z, axis = axis}
+end
+
+-- The unit direction in the muzzle frame that is this many degrees right of
+-- and above its forward (as the eye lines log them). Pure.
+function Sights.direction(right_degrees, up_degrees)
+    return normalize({math.tan(math.rad(right_degrees)), 1, math.tan(math.rad(up_degrees))})
 end
 
 -- A measured sight direction in the muzzle frame, or the muzzle's forward
@@ -137,6 +197,29 @@ function Sights.zeroing(grip, aim, offset, point)
     return q
 end
 
+-- The mean of measured sight-line samples ({x=, z=, axis={x,y,z}}), the
+-- largest distance of a sample's x or z from it (metres) and the largest
+-- angle of a sample's axis from the mean axis (degrees). Pure.
+function Sights.average(samples)
+    if type(samples) ~= "table" or #samples == 0 then return nil end
+    local x, y, z, axis = 0, 0, 0, {0, 0, 0}
+    for _, s in ipairs(samples) do
+        x, z = x + s.x, z + s.z
+        y = y and finite(s.y) and y + s.y or nil
+        local a = Sights.axis(s.axis)
+        for i = 1, 3 do axis[i] = axis[i] + a[i] end
+    end
+    local n = #samples
+    local mean = {x = x / n, y = y and y / n, z = z / n, axis = normalize(axis) or {0, 1, 0}}
+    local spread, angle = 0, 0
+    for _, s in ipairs(samples) do
+        spread = math.max(spread, math.abs(s.x - mean.x), math.abs(s.z - mean.z))
+        local d = math.max(-1, math.min(1, dot(Sights.axis(s.axis), mean.axis)))
+        angle = math.max(angle, math.deg(math.acos(d)))
+    end
+    return mean, spread, angle
+end
+
 -- How far the eye is from the sight line (perpendicular) and how far behind
 -- the sight it is along the aim. Arrays: grip, eye {x,y,z}; aim {x,y,z,w};
 -- offset {x=,z=}. Pure.
@@ -165,7 +248,24 @@ end
 function Sights.install(mod, presentation)
     local api = {eyes = {}, grips = {}, correction = {0, 0, 0, 1}}
     for name, eye in pairs(Sights.SHIPPED_EYES) do api.eyes[name] = {x = eye.x, z = eye.z, source = "shipped"} end
+    for name, line in pairs(Sights.SIGHT_LINES) do
+        mod:info("DARKTIDEVR_GUN_SIGHTS sighted template=%s line_in_muzzle=%.4f,%.4f along=%.4f axis_right_deg=%.3f axis_up_deg=%.3f",
+            name, line.x, line.z, line.y, line.right_degrees, line.up_degrees)
+    end
+    -- A template's eye: its recorded line (by template, else by family)
+    -- before anything shipped or measured.
+    local function eye_of(name)
+        local eye = api.eyes[name]
+        if eye and eye.source == "sighted" then return eye end
+        local line = Sights.SIGHT_LINES[name] or Sights.SIGHT_LINES[Sights.family(name)]
+        if not line then return eye end
+        eye = {x = line.x, y = line.y, z = line.z, source = "sighted",
+            axis = Sights.direction(line.right_degrees, line.up_degrees)}
+        api.eyes[name] = eye
+        return eye
+    end
     local ads_since, failures, logged, skipped = nil, 0, {}, {}
+    local samples = {}
 
     local function log_failure(message)
         failures = failures + 1
@@ -184,11 +284,11 @@ function Sights.install(mod, presentation)
 
     -- The sight line's offset from the grip for a template, or nil.
     function api.sight_offset(template_name)
-        return Sights.offset(api.eyes[template_name], api.grips[template_name])
+        return Sights.offset(eye_of(template_name), api.grips[template_name])
     end
     -- Gun aim: the drawn rotation for a gun about to be placed at grip.
     local function drawn(unit, template_name, grip, aim, dt)
-        local offset = Sights.offset(api.eyes[template_name], api.grips[template_name])
+        local offset = Sights.offset(eye_of(template_name), api.grips[template_name])
         local aim_state = presentation.controller_aim
         local boxed = aim_state and aim_state.reticle_point_owner == unit and
             aim_state.cached_reticle_target and aim_state.cached_reticle_target()
@@ -246,12 +346,13 @@ function Sights.install(mod, presentation)
     function api.observe_grip(template_name, muzzle_pose, grip_position)
         local ok, message = pcall(function()
             local local_grip = Matrix4x4.transform(Matrix4x4.inverse(muzzle_pose), grip_position)
-            local x, z = Vector3.x(local_grip), Vector3.z(local_grip)
+            local x, y, z = Vector3.x(local_grip), Vector3.y(local_grip), Vector3.z(local_grip)
             if not finite(x) or not finite(z) then return end
             if not api.grips[template_name] then
-                mod:info("DARKTIDEVR_GUN_SIGHTS grip template=%s grip_in_muzzle=%.4f,%.4f", template_name, x, z)
+                mod:info("DARKTIDEVR_GUN_SIGHTS grip template=%s grip_in_muzzle=%.4f,%.4f along=%.4f",
+                    template_name, x, z, finite(y) and y or 0)
             end
-            api.grips[template_name] = {x = x, z = z}
+            api.grips[template_name] = {x = x, y = finite(y) and y or nil, z = z}
         end)
         if not ok then log_failure(message) end
     end
@@ -262,10 +363,12 @@ function Sights.install(mod, presentation)
         local weapon = ScriptUnit.has_extension(unit, "weapon_system")
         local template = weapon and weapon:weapon_template()
         if not template or not presentation.gun_aim or not presentation.gun_aim.is_gun(template) or
-            not alternate or not alternate.is_active then ads_since = nil; return end
+            not alternate or not alternate.is_active then ads_since = nil; samples = {}; return end
         ads_since = ads_since or t
-        local eye = api.eyes[template.name]
-        if t - ads_since < Sights.ADS_SETTLE_SECONDS or (eye and eye.source == "measured") then return end
+        if samples.template ~= template.name then samples = {template = template.name} end
+        local eye = eye_of(template.name)
+        if t - ads_since < Sights.ADS_SETTLE_SECONDS or
+            (eye and (eye.source == "measured" or eye.source == "sighted")) then return end
         local loadout = ScriptUnit.has_extension(unit, "visual_loadout_system")
         local inventory = unit_data:read_component("inventory")
         local muzzle_name = template.fx_sources and template.fx_sources._muzzle
@@ -276,14 +379,22 @@ function Sights.install(mod, presentation)
         if not camera then return skip(template.name, "no_camera") end
         local unit_1p, node_1p = loadout:unit_and_node_from_node_name(inventory.wielded_slot, muzzle_name)
         if not unit_1p or not node_1p then return skip(template.name, "no_muzzle_node") end
+        -- The stock camera is the rig's animated camera node, not its root
+        -- (CameraSettings.player_first_person: FirstPersonAnimationCamera on
+        -- ap_camera_node). In the VR rig the two coincide during ADS, and the
+        -- line they give misses the bolter's sights (headless 25 October: the
+        -- front sight hidden behind the receiver), hence SIGHT_LINES.
+        if not Unit.has_node(camera, Sights.CAMERA_NODE) then return skip(template.name, "no_camera_node") end
+        local camera_node = Unit.node(camera, Sights.CAMERA_NODE)
         local muzzle_pose = Unit.world_pose(unit_1p, node_1p)
-        local camera_position = Unit.world_position(camera, 1)
+        local camera_position = Unit.world_position(camera, camera_node)
         local local_eye = Matrix4x4.transform(Matrix4x4.inverse(muzzle_pose), camera_position)
         -- The stock ADS camera looks along the sight line.
         local muzzle_rotation = Unit.world_rotation(unit_1p, node_1p)
         local mx, my, mz, mw = Quaternion.to_elements(muzzle_rotation)
-        local look = Quaternion.rotate(Quaternion.from_elements(-mx, -my, -mz, mw), Quaternion.forward(Unit.world_rotation(camera, 1)))
-        local measured = {x = Vector3.x(local_eye), z = Vector3.z(local_eye), source = "measured",
+        local look = Quaternion.rotate(Quaternion.from_elements(-mx, -my, -mz, mw),
+            Quaternion.forward(Unit.world_rotation(camera, camera_node)))
+        local measured = {x = Vector3.x(local_eye), y = Vector3.y(local_eye), z = Vector3.z(local_eye), source = "measured",
             axis = {Vector3.x(look), Vector3.y(look), Vector3.z(look)}}
         if not Sights.offset(measured, {x = 0, z = 0}) then
             -- The camera far from the sights: the camera, or the rig, is not
@@ -298,12 +409,24 @@ function Sights.install(mod, presentation)
                     tostring(first_person.is_in_first_person_mode and first_person:is_in_first_person_mode()))
             end)
         end
-        api.eyes[template.name] = measured
-        local axis = Sights.axis(measured.axis)
-        mod:info("DARKTIDEVR_GUN_SIGHTS eye template=%s eye_in_muzzle=%.4f,%.4f axis_right_deg=%.3f axis_up_deg=%.3f axis_used=%s previous=%s",
-            template.name, measured.x, measured.z, math.deg(math.atan2(measured.axis[1], measured.axis[2])),
-            math.deg(math.atan2(measured.axis[3], measured.axis[2])), tostring(axis[2] < 1),
-            eye and string.format("%.4f,%.4f", eye.x, eye.z) or "none")
+        samples[#samples + 1] = measured
+        if #samples < Sights.EYE_SAMPLES then return end
+        local mean, spread, angle = Sights.average(samples)
+        if spread > Sights.EYE_MAX_SPREAD or angle > Sights.EYE_MAX_AXIS_SPREAD_DEGREES then
+            -- Still swaying: slide the window on.
+            table.remove(samples, 1)
+            return skip(template.name, "unsteady", function()
+                return string.format(" spread_mm=%.1f axis_spread_deg=%.2f", spread * 1000, angle)
+            end)
+        end
+        mean.source = "measured"
+        api.eyes[template.name] = mean
+        samples = {}
+        local axis = Sights.axis(mean.axis)
+        mod:info("DARKTIDEVR_GUN_SIGHTS eye template=%s eye_in_muzzle=%.4f,%.4f along=%.4f axis_right_deg=%.3f axis_up_deg=%.3f axis_used=%s samples=%d spread_mm=%.1f axis_spread_deg=%.2f previous=%s",
+            template.name, mean.x, mean.z, mean.y or 0, math.deg(math.atan2(mean.axis[1], mean.axis[2])),
+            math.deg(math.atan2(mean.axis[3], mean.axis[2])), tostring(axis[2] < 1), Sights.EYE_SAMPLES,
+            spread * 1000, angle, eye and string.format("%.4f,%.4f", eye.x, eye.z) or "none")
     end
 
     function api.update(unit, t)
