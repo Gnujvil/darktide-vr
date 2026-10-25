@@ -153,4 +153,13 @@ assert(not pcall(mod.request_crosshair_check,'remote',1))
 local angle,miss,along=Evidence.ray_to_point(Vector3(0,0,0),Vector3(0,1,0),Vector3(0,-10,0))
 assert(angle==180 and miss==0 and along==-10,'backwards sight line falsely aligned')
 assert(Evidence.ray_to_point(Vector3(0,0,0),Vector3(0,0,0),Vector3(0,10,0))==nil)
+-- Signed crosshair offset from the shot: a crosshair drawn low reads negative.
+local above,right=Evidence.offset_degrees(Vector3(1,2,3),Vector3(0,2,0),Vector3(1,12,2))
+assert(math.abs(above+math.deg(math.atan(.1)))<1e-9 and math.abs(right)<1e-9,'low crosshair not negative')
+above,right=Evidence.offset_degrees(Vector3(0,0,0),Vector3(1,0,0),Vector3(10,-1,0))
+assert(math.abs(above)<1e-9 and math.abs(right-math.deg(math.atan(.1)))<1e-9,'right of a sideways shot misread')
+assert(Evidence.offset_degrees(Vector3(0,0,0),Vector3(0,1,0),Vector3(0,-10,0))==nil,'a point behind the shot read')
+assert(Evidence.offset_degrees(Vector3(0,0,0),Vector3(0,0,1),Vector3(0,0,10))==nil,'a vertical shot read')
+assert(logs[1]:find('reticle_above_shot_deg=0.000 reticle_right_of_shot_deg=0.000 reticle=0.0000,10.0000,0.0000',1,true),
+    'shot line lacks the signed crosshair offset')
 print('PASS crosshair geometry: posed bore vs sight, bounded/throttled local samples, session isolation and invalid direction refusal')

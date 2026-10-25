@@ -40,7 +40,21 @@ function Scan.install(mod, presentation)
             -- hidepreview=1: weapon hand holster previews forced hidden (A/B captures).
             hidepreview = rest:match("hidepreview=1") ~= nil,
             -- gripx=<metres>: the gun hand's sideways position (default 0.12 right).
-            gripx = tonumber(rest:match("gripx=(%-?[%d.]+)"))}
+            gripx = tonumber(rest:match("gripx=(%-?[%d.]+)")),
+            -- gripz=<metres>: its height from the head (default by sight=1 or not).
+            gripz = tonumber(rest:match("gripz=(%-?[%d.]+)")),
+            -- tracked=1: the posed right hand counts as tracked, for an unworn
+            -- headset whose controller sleeps.
+            tracked = rest:match("tracked=1") ~= nil,
+            -- fire=N: once posed, the right trigger is pressed for one input
+            -- frame every N (crosshair checks: each shot against the crosshair).
+            fire = tonumber(rest:match("fire=(%d+)")),
+            -- mark=1: a cross drawn in the world at the crosshair point, so eye
+            -- renders without the viewer (offline dual view) show where it is.
+            mark = rest:match("mark=1") ~= nil,
+            -- pitch=<degrees>: the posed hand's aim pitch (10 cancels the
+            -- default -10 gun pitch, so the sight line is level through the eye).
+            pitch = tonumber(rest:match("pitch=(%-?[%d.]+)")) or 0}
         for a, b in (rest:match("hide=([%d,%-]+)") or ""):gmatch("(%d+)%-?(%d*)") do
             for index = tonumber(a), tonumber(b ~= "" and b or a) do view.hide[index] = true end
         end
@@ -69,14 +83,22 @@ function Scan.install(mod, presentation)
         if not view or not view.active then return end
         local half = math.rad(view.yaw) * 0.5
         local qz, qw = math.sin(half), math.cos(half)
+        -- Yaw then pitch: (0,0,sz,cz) * (sp,0,0,cp).
+        local pitch_half = math.rad(view.pitch or 0) * 0.5
+        local sp, cp = math.sin(pitch_half), math.cos(pitch_half)
+        local qx, qy = qw * sp, qz * sp
+        qz, qw = qz * cp, qw * cp
         for _, kind in ipairs({"grip", "aim"}) do
             observation["right_" .. kind .. "_x"] = view.gripx or (view.sight and 0.032 or 0.12)
             observation["right_" .. kind .. "_y"] = view.sight and 0.25 or (view.far and 0.55 or 0.32)
-            observation["right_" .. kind .. "_z"] = view.sight and -0.118 or -0.10
-            observation["right_" .. kind .. "_qx"] = 0
-            observation["right_" .. kind .. "_qy"] = 0
+            observation["right_" .. kind .. "_z"] = view.gripz or (view.sight and -0.118 or -0.10)
+            observation["right_" .. kind .. "_qx"] = qx
+            observation["right_" .. kind .. "_qy"] = qy
             observation["right_" .. kind .. "_qz"] = qz
             observation["right_" .. kind .. "_qw"] = qw
+        end
+        if view.tracked then
+            observation.right_aim_usable, observation.right_grip_tracking_live = true, true
         end
         if view.left then
             local Forearm = presentation.forearm_holsters_module
@@ -119,6 +141,18 @@ function Scan.install(mod, presentation)
             if released then released[0] = bit.band(tonumber(released[0]) or 0, bit.bnot(2)) end
             view.ads_pressed = true
         end
+        if view.fire and view.fire > 0 then
+            local held, pressed, released = observation.gameplay_held, observation.gameplay_pressed, observation.gameplay_released
+            view.fire_frames = (view.fire_frames or 0) + 1
+            if view.fire_frames > 120 and view.fire_frames % view.fire == 0 then
+                if held then held[0] = bit.bor(tonumber(held[0]) or 0, 1) end
+                if pressed then pressed[0] = bit.bor(tonumber(pressed[0]) or 0, 1) end
+                view.fire_down = true
+            elseif view.fire_down then
+                if released then released[0] = bit.bor(tonumber(released[0]) or 0, 1) end
+                view.fire_down = false
+            end
+        end
     end
     local hidden, hidden_units = {}, {}
     local restore_group
@@ -129,8 +163,66 @@ function Scan.install(mod, presentation)
         end
         return false
     end
+    -- The crosshair point as a view-facing cross 0.8 degrees across, drawn a
+    -- little toward the eye so the surface it marks does not cover it.
+    local mark_gui, mark_world
+    local function mark_line(a, b, eye, color, width)
+        local delta = b - a
+        local length = Vector3.length(delta)
+        if length < 0.00001 then return end
+        local along = delta / length
+        local across = Vector3.cross(along, eye - (a + b) * 0.5)
+        if Vector3.length(across) < 0.00001 then return end
+        local up = Vector3.normalize(across)
+        local tm = Matrix4x4.identity()
+        Matrix4x4.set_right(tm, along); Matrix4x4.set_up(tm, up)
+        Matrix4x4.set_forward(tm, Vector3.cross(up, along)); Matrix4x4.set_translation(tm, a)
+        Gui.rect_3d(mark_gui, tm, Vector2(0, -width * 0.5), 1, Vector2(length, width), color)
+    end
+    local function draw_mark(unit)
+        local aim = presentation.controller_aim
+        local boxed = aim and aim.cached_reticle_target and aim.cached_reticle_target()
+        local eye = presentation.eye_pose and presentation.eye_pose(unit)
+        local world = Unit.world(unit)
+        if not boxed or not eye or not world then
+            if not logged.mark_missing then
+                logged.mark_missing = true
+                mod:info("DARKTIDEVR_ATTACHMENT_SCAN mark_missing point=%s eye=%s world=%s",
+                    tostring(boxed ~= nil), tostring(eye ~= nil), tostring(world ~= nil))
+            end
+            return
+        end
+        if mark_world ~= world then mark_gui = nil end
+        if not mark_gui then
+            mark_gui, mark_world = World.create_world_gui(world, Matrix4x4.identity(), 1, 1, "immediate"), world
+        end
+        local point = boxed:unbox()
+        local to_eye = eye - point
+        local distance = Vector3.length(to_eye)
+        if distance < 0.3 then return end
+        local back = to_eye / distance
+        point = point + back * math.min(0.05, distance * 0.02)
+        local side = Vector3.cross(back, Vector3.up())
+        if Vector3.length(side) < 0.0001 then side = Vector3(1, 0, 0) end
+        side = Vector3.normalize(side)
+        local up = Vector3.cross(side, back)
+        local arm = distance * math.tan(math.rad(0.4))
+        local color = Color(255, 40, 255, 40)
+        mark_line(point - side * arm, point + side * arm, eye, color, arm * 0.15)
+        mark_line(point - up * arm, point + up * arm, eye, color, arm * 0.15)
+    end
     local function view_update(unit)
         local view = api.view
+        if view and view.mark and view.active then
+            local mark_ok, mark_error = pcall(draw_mark, unit)
+            if not mark_ok and not logged.mark_failure then
+                logged.mark_failure = true
+                mod:info("DARKTIDEVR_ATTACHMENT_SCAN mark_failed=%s", tostring(mark_error):sub(1, 160))
+            elseif mark_ok and not logged.mark_drawn and mark_gui then
+                logged.mark_drawn = true
+                mod:info("DARKTIDEVR_ATTACHMENT_SCAN mark=drawn")
+            end
+        end
         local unit_data = ScriptUnit.has_extension(unit, "unit_data_system")
         local inventory = unit_data and unit_data:read_component("inventory")
         local loadout = ScriptUnit.has_extension(unit, "visual_loadout_system")
@@ -138,7 +230,7 @@ function Scan.install(mod, presentation)
         local ranged = view and slot and inventory.wielded_slot == "slot_secondary" and slot.unit_3p
         if view then view.active = ranged and true or false end
         if not ranged then
-            if view then view.frames = 0 end
+            if view then view.frames, view.fire_frames = 0, nil end
             view = nil
         end
         local receiver

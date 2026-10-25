@@ -28,6 +28,24 @@ function Evidence.ray_to_point(origin,direction,point)
     local cosine=math.max(-1,math.min(1,along/math.sqrt(length2)))
     return math.deg(math.acos(cosine)),math.sqrt(math.max(0,length2-along*along)),along
 end
+-- Where the crosshair point sits seen from the shot: degrees above and to the
+-- right of its direction (world z up), so a crosshair drawn low reads
+-- negative. nil when the point is not ahead of the shot or the shot is vertical.
+function Evidence.offset_degrees(origin,direction,point)
+    local dx,dy,dz=Vector3.x(direction),Vector3.y(direction),Vector3.z(direction)
+    local n=math.sqrt(dx*dx+dy*dy+dz*dz)
+    if not finite(n) or n<1e-6 then return end
+    dx,dy,dz=dx/n,dy/n,dz/n
+    local rx,ry=dy,-dx
+    local rn=math.sqrt(rx*rx+ry*ry)
+    if rn<1e-6 then return end
+    rx,ry=rx/rn,ry/rn
+    local ux,uy,uz=ry*dz,-rx*dz,rx*dy-ry*dx
+    local tx,ty,tz=Vector3.x(point)-Vector3.x(origin),Vector3.y(point)-Vector3.y(origin),Vector3.z(point)-Vector3.z(origin)
+    local along=tx*dx+ty*dy+tz*dz
+    if not finite(along) or along<=1e-6 then return end
+    return math.deg(math.atan2(tx*ux+ty*uy+tz*uz,along)),math.deg(math.atan2(tx*rx+ty*ry,along))
+end
 local function vector_text(v)
     if not v then return 'unavailable' end
     local x,y,z=Vector3.x(v),Vector3.y(v),Vector3.z(v)
@@ -135,13 +153,16 @@ function Evidence.install(mod,presentation)
         local direction=rotation and Quaternion.forward(rotation)
         local aim=presentation.controller_aim
         local point=aim and aim.cached_reticle_target()
-        local angle='unavailable'
-        if point and position and direction then
-            local toward=point:unbox()-position
+        local angle,above,right='unavailable','unavailable','unavailable'
+        local target=point and point:unbox()
+        if target and position and direction then
+            local toward=target-position
             if Vector3.length_squared(toward)>1e-8 then
                 local dot=Vector3.dot(Vector3.normalize(toward),Vector3.normalize(direction))
                 if finite(dot) then angle=string.format('%.3f',math.deg(math.acos(math.max(-1,math.min(1,dot))))) end
             end
+            local up_degrees,right_degrees=Evidence.offset_degrees(position,direction,target)
+            if up_degrees then above,right=string.format('%.3f',up_degrees),string.format('%.3f',right_degrees) end
         end
         local result=action._shot_result
         local hit=result and result.data_valid and tostring(result.hit_minion==true) or 'unknown'
@@ -154,10 +175,10 @@ function Evidence.install(mod,presentation)
             muzzle,muzzle_rotation=aim.third_person_muzzle(action,finite(fired) and math.max(0,fired-1) or nil)
         end
         local muzzle_direction=muzzle_rotation and Quaternion.forward(muzzle_rotation)
-        mod:info('DARKTIDEVR_RANGED_EVIDENCE weapon=%s kind=%s action=%s dispatch=%d authority=%s time=%s charge=%s origin=%s direction=%s shot_vs_reticle_deg=%s hit_minion=%s muzzle=%s muzzle_node_forward=%s',
+        mod:info('DARKTIDEVR_RANGED_EVIDENCE weapon=%s kind=%s action=%s dispatch=%d authority=%s time=%s charge=%s origin=%s direction=%s shot_vs_reticle_deg=%s reticle_above_shot_deg=%s reticle_right_of_shot_deg=%s reticle=%s hit_minion=%s muzzle=%s muzzle_node_forward=%s',
             weapon,kind,tostring(action_name or 'unknown'),row.calls,
             action._is_server and 'server' or 'client',tostring(t),tostring(charge),
-            vector_text(position),vector_text(direction),angle,hit,
+            vector_text(position),vector_text(direction),angle,above,right,vector_text(target),hit,
             vector_text(muzzle),vector_text(muzzle_direction))
     end
     function instance.observe(...)
