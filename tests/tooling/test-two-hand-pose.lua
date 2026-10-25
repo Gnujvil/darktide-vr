@@ -289,3 +289,25 @@ do
     assert(not Pose.near_gun(q,primary,{0,-.05,0},socket,.1,1.1),'behind the gun hand')
 end
 print('gun_grab_coverage=pass socket muzzle receiver beside past unknown behind')
+-- A grip measured in a gun's stock muzzle frame, carried into the frame of the
+-- gun as drawn levelled (darktidevr_gun_aim). The Headhunter autogun's muzzle
+-- node is authored rolled 45 degrees: its measured grip is the infantry
+-- autogun's rolled by 45 degrees (worn, 25 October), and levelled it is that
+-- grip again. With a pivot the drawn foregrip is R*(socket-pivot)+pivot.
+do
+    local p3,p1,hand={-.047,.281,-.037},{-.059,.281,.007},{.1,.2,.3,.927}
+    local same,same_hand=Pose.drawn_grip(p3,hand,0,nil)
+    near(same,p3); near(same_hand,Pose.relative_rotation({0,0,0,1},hand))
+    local level,level_hand=Pose.drawn_grip(p3,hand,math.rad(45),nil)
+    near(level,p1,1e-3)
+    local half=math.rad(45)/2
+    local r={0,math.sin(half),0,math.cos(half)}
+    local expected=Pose.relative_rotation({-r[1],-r[2],-r[3],r[4]},hand)
+    near(level_hand,expected,1e-8)
+    local pivot={.03,-.12,-.07}
+    local moved=Pose.drawn_grip(p3,hand,math.rad(45),pivot)
+    local turned=Pose.drawn_grip({p3[1]-pivot[1],p3[2]-pivot[2],p3[3]-pivot[3]},hand,math.rad(45),nil)
+    near(moved,{turned[1]+pivot[1],turned[2]+pivot[2],turned[3]+pivot[3]},1e-12)
+    assert(Pose.drawn_grip(nil,hand,0)==nil and Pose.drawn_grip(p3,hand,0/0)==nil,'invalid input accepted')
+end
+print('drawn_grip=pass upright levelled hand pivot invalid')

@@ -252,6 +252,8 @@ function Support.install(mod,presentation,observation)
     Support.SETTLE_FRAMES=6
     Support.SETTLE_TOLERANCE=.005
     Support.STORE_TOLERANCE=.003
+    -- Idle frames in a row with the hand off the weapon that rule it one-handed.
+    Support.ONE_HANDED_FRAMES=120
     Support.STORE_KEY='vr_two_hand_grips_v1'
     local function vec3(v) return v and {Vector3.x(v),Vector3.y(v),Vector3.z(v)} end
     local function quat(q) return q and {Quaternion.to_elements(q)} end
@@ -319,9 +321,15 @@ function Support.install(mod,presentation,observation)
             quat(Unit.world_rotation(rig,left)),quat(muzzle_in_attach))
         if not socket then
             session.settle.reset()
-            if steady then
+            -- A one-handed weapon rests its idle hand off the weapon. Only idle
+            -- frames in a row count: aiming down the sights takes a two-handed
+            -- gun's animated hand off it too, and nothing counts while the
+            -- support hand holds the gun or once a full average has shown the
+            -- hand on it (worn, 25 October: the braced autogun, aimed mid-hold,
+            -- lost its grip and its waiting measurement for the session).
+            if not action and not api.held and not session.pending then
                 session.rejected=session.rejected+1
-                if session.rejected==120 then
+                if session.rejected==Support.ONE_HANDED_FRAMES then
                     session.final=true
                     -- A one-handed weapon's draw can rest the hand briefly.
                     if grips[name] and grips[name].source=='settled' then grips[name]=nil end
@@ -332,6 +340,7 @@ function Support.install(mod,presentation,observation)
             end
             return
         end
+        session.rejected=0
         if not grips[name] then
             local settled=session.settle.add(socket,hand)
             if settled then
@@ -411,8 +420,34 @@ function Support.install(mod,presentation,observation)
         local dot=math.abs(a[1]*b[1]+a[2]*b[2]+a[3]*b[3]+a[4]*b[4])
         return math.deg(2*math.acos(math.min(1,dot)))
     end
+    -- Authored grips are measured in the stock muzzle frame. A gun whose muzzle
+    -- node is authored rolled is drawn levelled, and moved to keep its drawn
+    -- hand on the controller (darktidevr_gun_aim drawn_frames), so its foregrip
+    -- sits elsewhere in the aim frame; the zone, the steering and the glove use
+    -- that place (worn, 25 October: the levelled Headhunter autogun jumped 9
+    -- degrees on taking hold). One profile per grip and drawn frame, as a new
+    -- table retires the gesture, and a held grip keeps its frame until let go.
+    local drawn_grips=setmetatable({},{__mode='k'})
+    local function drawn_grip(entry,template)
+        if not entry then return nil end
+        local frames=presentation.gun_aim and presentation.gun_aim.drawn_frames
+        local drawn=frames and frames[template]
+        local cached=drawn_grips[entry]
+        if cached and (cached.drawn==drawn or api.held) then return cached.profile end
+        local profile=entry
+        if drawn and finite(drawn.cant) and drawn.cant~=0 then
+            local socket,hand=Pose.drawn_grip(entry.socket,entry.hand_rotation,drawn.cant,drawn.pivot)
+            if socket and hand then
+                profile={}
+                for key,value in pairs(entry) do profile[key]=value end
+                profile.socket,profile.hand_rotation=socket,hand
+            end
+        end
+        drawn_grips[entry]={drawn=drawn,profile=profile}
+        return profile
+    end
     function api.authored_profile(frame)
-        return frame and type(frame.template)=='string' and grips[frame.template] or nil
+        return frame and type(frame.template)=='string' and drawn_grip(grips[frame.template],frame.template) or nil
     end
     -- Development preview: darktidevr_two_hand_test.flag "preview" places the
     -- support glove on the authored grip without a grip press, so the eye
@@ -626,7 +661,7 @@ function Support.install(mod,presentation,observation)
         if preview_requested() then
             local weapon=unit and ScriptUnit.has_extension(unit,'weapon_system')
             local template=weapon and weapon:weapon_template()
-            local grip=template and grips[template.name]
+            local grip=template and api.authored_profile({template=template.name})
             if grip then
                 position,orientation=Pose.hand(quaternion(rotation),vector(primary),grip.socket,grip.hand_rotation)
                 authored_rotation=true

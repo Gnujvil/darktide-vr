@@ -100,6 +100,20 @@ function Pose.authored_socket(attach_position,attach_rotation,left_position,left
     local hand=normalize(multiply(inverse(muzzle),multiply(inverse(attach),left)),4)
     return socket,hand
 end
+-- An authored grip (stock muzzle frame) carried into the frame of the gun as
+-- drawn (darktidevr_gun_aim): a gun whose muzzle node is authored rolled is
+-- drawn with its aim turned about its forward axis by cant (R), and, once its
+-- drawn hand is known, moved so that hand stays on the controller; pivot is
+-- that hand's offset in the muzzle frame. The drawn foregrip, from the
+-- controller grip in the aim frame, is then R*(socket-pivot)+pivot, and the
+-- hand's rotation R*hand. nil for unusable input.
+function Pose.drawn_grip(socket,hand,cant,pivot)
+    if not valid(socket,3) or not finite(cant) then return nil end
+    local r={0,math.sin(cant*.5),0,math.cos(cant*.5)}
+    local u=valid(pivot,3) and pivot or {0,0,0}
+    local turned=rotate(r,difference(socket,u))
+    return {turned[1]+u[1],turned[2]+u[2],turned[3]+u[3]},normalize(valid(hand,4) and multiply(r,hand) or nil,4)
+end
 -- Running mean of authored sockets for one weapon; the hand rotation is the
 -- latest sample's (the animation keeps it steady on the grip).
 function Pose.new_authored_average(samples)

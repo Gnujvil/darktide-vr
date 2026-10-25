@@ -469,7 +469,67 @@ do
     local stored_gun={name='stored_p1_m1'}
     for _=1,Support.AUTHORED_SAMPLES do grips.observe_authored(owner,item,stored_gun,{0,0,0,1}) end
     assert(grips.authored_profile({template='stored_p1_m1'})==stored and sets==1,'unchanged stored grip rewritten')
-    print('two_hand_authored_grips=pass shipped stored settled deferred_swap store stop one_handed unchanged')
+    -- Aiming down the sights while the grip is held takes the animated hand
+    -- off the weapon. That is no one-handed weapon (worn, 25 October: the
+    -- braced autogun lost its grip mid-hold, and its waiting measurement, for
+    -- the rest of the session).
+    local function observe_gun(gun_template,n) for _=1,n do grips.observe_authored(owner,item,gun_template,{0,0,0,1}) end end
+    local braced={name='braced_p2_m3'}
+    left={-.06,.28,.007}; grip_action={kind='wield'}
+    observe_gun(braced,Support.SETTLE_FRAMES)
+    local braced_settled=assert(grips.authored_profile({template='braced_p2_m3'}),'braced gun gave no grip')
+    grip_action=nil; grips.held=true
+    observe_gun(braced,Support.AUTHORED_SAMPLES)
+    grip_action={kind='aim'}; left={-.3,.05,-.3}
+    observe_gun(braced,300)
+    assert(grips.authored_profile({template='braced_p2_m3'})==braced_settled,'aiming mid-hold dropped the grip')
+    assert(not lines[#lines]:find('authored_grip=none',1,true),'aiming mid-hold ruled the gun one-handed')
+    grips.held=false; grip_action=nil; left={-.06,.28,.007}
+    observe_gun(braced,1)
+    assert(grips.authored_profile({template='braced_p2_m3'}).source=='measured' and sets==2,
+        'the measurement waiting for release was lost')
+    -- Aiming before the measurement is complete does not count either, and an
+    -- idle hand off the weapon counts only while it stays off.
+    local rifle={name='rifle_p1_m1'}
+    grip_action={kind='wield'}
+    observe_gun(rifle,Support.SETTLE_FRAMES)
+    grip_action={kind='aim'}; left={-.3,.05,-.3}
+    observe_gun(rifle,300)
+    assert(grips.authored_profile({template='rifle_p1_m1'}),'aiming before the measurement dropped the grip')
+    grip_action=nil
+    observe_gun(rifle,100); left={-.06,.28,.007}; observe_gun(rifle,1); left={-.3,.05,-.3}; observe_gun(rifle,100)
+    assert(grips.authored_profile({template='rifle_p1_m1'}),'a brief rest ruled the gun one-handed')
+    observe_gun(rifle,20)
+    assert(grips.authored_profile({template='rifle_p1_m1'})==nil,'a steady idle hand off the weapon kept the grip')
+    print('two_hand_authored_grips=pass shipped stored settled deferred_swap store stop one_handed unchanged aim_held aim_unmeasured consecutive')
+end
+-- A gun drawn levelled (darktidevr_gun_aim drawn_frames: its muzzle node is
+-- authored rolled) has its grip carried into the drawn frame for the zone,
+-- the steering and the glove; a held grip keeps its frame until let go.
+do
+    Support.SHIPPED_GRIPS={canted_p3_m3={socket={-.047,.281,-.037},hand_rotation={0,0,0,1}}}
+    local drawn_presentation=setmetatable({gun_aim={drawn_frames={}}},{__index=presentation})
+    local drawn_api=Support.install({io_dofile=function() return Pose end,info=function() end},
+        drawn_presentation,observations)
+    Support.SHIPPED_GRIPS={}
+    local frame={template='canted_p3_m3'}
+    local raw=drawn_api.authored_profile(frame)
+    assert(raw.socket[3]==-.037,'grip moved without a drawn frame')
+    drawn_presentation.gun_aim.drawn_frames.canted_p3_m3={cant=math.rad(45)}
+    local levelled=drawn_api.authored_profile(frame)
+    assert(math.abs(levelled.socket[1]+.0594)<5e-4 and math.abs(levelled.socket[3]-.0071)<5e-4 and
+        levelled.source=='shipped' and levelled.authored,'levelled gun kept the rolled grip')
+    assert(drawn_api.authored_profile(frame)==levelled,'drawn grip rebuilt every frame (retires the gesture)')
+    drawn_api.held=true
+    drawn_presentation.gun_aim.drawn_frames.canted_p3_m3={cant=math.rad(45),pivot={.03,-.12,-.07}}
+    assert(drawn_api.authored_profile(frame)==levelled,'drawn frame swapped mid-hold')
+    drawn_api.held=false
+    local pivoted=drawn_api.authored_profile(frame)
+    assert(pivoted~=levelled and math.abs(pivoted.socket[1]-levelled.socket[1])>1e-3,'pivot ignored after release')
+    drawn_presentation.gun_aim.drawn_frames.canted_p3_m3={cant=0}
+    local upright=drawn_api.authored_profile(frame)
+    for i=1,3 do assert(upright.socket[i]==raw.socket[i],'upright gun grip changed') end
+    print('two_hand_drawn_grip=pass raw levelled stable held_keeps pivot upright')
 end
 -- Steadying option: classic passes no steady table; hands line passes the
 -- frame's scene basis to the pose filter.

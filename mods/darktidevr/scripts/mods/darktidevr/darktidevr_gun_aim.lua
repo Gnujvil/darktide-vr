@@ -58,7 +58,19 @@ local function same(a,b)
 end
 function Alignment.install(mod,presentation)
     -- Attach node to muzzle, metres, per template (two-hand grab coverage).
-    local instance={failures=0,writes=0,is_gun=Alignment.is_gun,muzzle_lengths={}}
+    -- drawn_frames, per template: how the gun is drawn relative to the stock
+    -- muzzle frame, {cant=radians, pivot={x,y,z} or nil} (the drawn hand's
+    -- offset in the muzzle frame once the gun pivots at it). Two-hand support
+    -- carries its authored grips into this frame. A new table only on change.
+    local instance={failures=0,writes=0,is_gun=Alignment.is_gun,muzzle_lengths={},drawn_frames={}}
+    local function note_drawn(name,cant,pivot)
+        if type(name)~='string' then return end
+        local old=instance.drawn_frames[name]
+        if old and math.abs(old.cant-cant)<1e-3 and (old.pivot==nil)==(pivot==nil) and
+            (not pivot or math.abs(old.pivot[1]-pivot[1])+math.abs(old.pivot[2]-pivot[2])+
+                math.abs(old.pivot[3]-pivot[3])<1e-3) then return end
+        instance.drawn_frames[name]={cant=cant,pivot=pivot}
+    end
     -- One pitch for every weapon and item, so switching between a gun, a melee
     -- weapon, a staff or a blitz never moves the crosshair.
     function instance.base_aim(unit,rotation)
@@ -150,7 +162,11 @@ function Alignment.install(mod,presentation)
         -- Draw every gun upright in the hand (user, 22 October: "switching
         -- guns with the hand held still, the hand must not rotate"). The
         -- grip's place around the bore is rigid per gun, so it is read from
-        -- the poses before this frame's write.
+        -- the poses before this frame's write. Two-hand support works from
+        -- the controller's grip and aim, and is told how the gun is drawn
+        -- about them (drawn_frames).
+        local hand_grip,hand_aim=grip,aim
+        local drawn_cant,drawn_pivot=0,nil
         local grip_local=Matrix4x4.transform(Matrix4x4.inverse(Unit.world_pose(muzzle_unit,muzzle_node)),old_attach_position)
         local gx,gz=Vector3.x(grip_local),Vector3.z(grip_local)
         if gx==gx and gz==gz and gx*gx+gz*gz>.0004 then
@@ -169,11 +185,16 @@ function Alignment.install(mod,presentation)
                     presentation.body_proxy.gun_hand_offsets[template.name]
                 if held and held.position then
                     local attach_to_muzzle=Quaternion.multiply(Quaternion.inverse(old_attach_rotation),Unit.world_rotation(muzzle_unit,muzzle_node))
-                    grip=Alignment.pivot(grip,aim,levelled,attach_to_muzzle,held.position:unbox())
+                    local offset=held.position:unbox()
+                    grip=Alignment.pivot(grip,aim,levelled,attach_to_muzzle,offset)
+                    local pivot=Quaternion.rotate(Quaternion.inverse(attach_to_muzzle),offset)
+                    drawn_pivot={Vector3.x(pivot),Vector3.y(pivot),Vector3.z(pivot)}
                 end
+                drawn_cant=cant
                 aim=levelled
             end
         end
+        note_drawn(template.name,drawn_cant,drawn_pivot)
         local original_position=Unit.local_position(unit,attach)
         local desired_position=Matrix4x4.transform(Matrix4x4.inverse(Unit.world_pose(unit,parent)),grip)
         local desired=Alignment.rotation(Unit.world_rotation(unit,parent),
@@ -205,7 +226,7 @@ function Alignment.install(mod,presentation)
                 Unit.world_position(unit,attach),Unit.world_rotation(unit,attach),dominant,template.name,steady)
             if dominant=='left' and not aligned then restore(world); return end
         end
-        if presentation.two_hand then presentation.two_hand.place_hand(world,unit,grip,aim) end
+        if presentation.two_hand then presentation.two_hand.place_hand(world,unit,hand_grip,hand_aim) end
         if presentation.gun_sights then
             presentation.gun_sights.observe_grip(template.name,Unit.world_pose(muzzle_unit,muzzle_node),Unit.world_position(unit,attach))
         end

@@ -301,4 +301,46 @@ do
     local after=moved+Quaternion.rotate(mul(upright,Quaternion.inverse(a2m)),offset)
     assert(Vector3.distance(before,after)<1e-9,'uncanting moved the hand off the controller')
 end
+-- The two-hand grip follows the gun as drawn (worn, 25 October: the levelled
+-- Headhunter autogun jumped 9 degrees on taking hold). place_hand gets the
+-- controller's grip and aim, not the levelled, pivoted gun, and a grip measured
+-- in the stock muzzle frame, carried by the published drawn frame, lands on the
+-- drawn gun's own foregrip, before and after the drawn hand's pivot applies.
+do
+    local Pose=dofile((arg[1]:gsub('darktidevr_gun_aim%.lua$','darktidevr_two_hand_pose.lua')))
+    -- The gun's boxes again (the hand-offset block above replaced Vector3Box).
+    Vector3Box=QuaternionBox
+    local failures=instance.failures
+    weapon._fx_extension.vfx_spawner_unit_and_node=function() return nil,nil,muzzle,1 end
+    template={name='autogun_p3_m3',actions={shoot={kind='shoot_hit_scan'}}}
+    muzzle_offset={-.0557,.5,.0557}
+    aim,grip=q(.3,.8,-.2),vec({.4,-.2,1.3})
+    presentation.weapon_aim_target=function() return nil,aim end
+    presentation.weapon_grip_target=function() return grip end
+    local placed_grip,placed_aim
+    presentation.two_hand={resolve=function(_,r) return r end,
+        place_hand=function(w,u,g,a) assert(w==world and u==source); placed_grip,placed_aim=g,a end}
+    local socket,hand={-.047,.281,-.037},{0,0,0,1}
+    local function check(label)
+        instance.update(world,source)
+        assert(placed_grip==grip,label..': glove not placed from the controller grip')
+        near(placed_aim,aim)
+        local drawn=instance.drawn_frames.autogun_p3_m3
+        assert(drawn and math.abs(math.deg(drawn.cant)-45)<1e-6,label..': drawn cant not published')
+        local glove=Pose.hand(placed_aim,placed_grip,Pose.drawn_grip(socket,hand,drawn.cant,drawn.pivot),hand)
+        local foregrip=add(Unit.world_position(source,2),rotate(Unit.world_rotation(muzzle,1),socket))
+        assert(instance.failures==failures,label..': the gun was not placed')
+        near(Unit.world_rotation(muzzle,1),Alignment.uncant(aim,drawn.cant))
+        assert(Vector3.distance(glove,foregrip)<1e-9,label..': glove off the drawn foregrip')
+        return drawn
+    end
+    local levelled=check('levelled')
+    assert(not levelled.pivot and check('levelled')==levelled,'drawn frame republished unchanged')
+    presentation.body_proxy={gun_hand_offsets={autogun_p3_m3={position={unbox=function() return vec({.057,-.141,-.06}) end}}}}
+    assert(check('pivoted').pivot,'pivot not published')
+    muzzle_offset={0,.5,.1}; template={name='shotgun_p4_m1',actions={shoot={kind='shoot_pellets'}}}
+    instance.update(world,source)
+    assert(instance.drawn_frames.shotgun_p4_m1.cant==0,'upright gun published a cant')
+    presentation.body_proxy=nil; presentation.two_hand=nil
+end
 print('PASS controller gun pitch/hand: 120 poses, pitch sign/live setting/shared pitch for every item and hand, draw/reload ownership, actual simulation reader and rigid-hand relative grip preservation')
