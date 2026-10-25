@@ -11,13 +11,21 @@ local disabled = {
     sun_flare_enabled = true,
 }
 local qualities = { dof_quality = true, lens_flare_quality = true }
+-- Stock DLSS Frame Generation reaches the headset only through the native
+-- generated-stereo path. Without that path the game still generates for its
+-- packed stereo swapchain: on 25 October that cost 3-4 GB of video memory and
+-- two thirds of the original stereo rate at 2528x2704 per eye, with no
+-- generated frame in the headset, and a 12 GB card ran out of memory (DLSS
+-- error 39, then a renderer timeout). Off only while the path is unavailable.
+local frame_generation = { dlss_g_enabled = true }
+local frame_generation_master = { dlss_g = true }
 local environment_disabled = {
     dof_enabled = true,
     fullscreen_blur_enabled = true,
     fullscreen_blur_amount = true,
 }
 
-function VisualSettings.install(mod)
+function VisualSettings.install(mod, native_accessor)
     -- Camera mood blends and several menus bypass render-settings writes.
     -- Clamp at the final apply boundary, after those blends/direct writes,
     -- rather than altering the shared mood resources or other lighting values.
@@ -27,6 +35,35 @@ function VisualSettings.install(mod)
         end
         return func(environment, ...)
     end)
+    local function user_boolean(key)
+        if not Application.user_setting then return "unavailable" end
+        local ok, value = pcall(Application.user_setting, "render_settings", key)
+        if ok and type(value) == "boolean" then return tostring(value) end
+        return "unavailable"
+    end
+    -- Decided once the native module answers; its bootstrap has already
+    -- settled the generated-stereo path at device creation. A flat or offline
+    -- run (no bootstrap) and a module without the export keep the setting.
+    local suppress_frame_generation = false
+    local frame_generation_decided = false
+    local function decide_frame_generation()
+        if frame_generation_decided then return false end
+        local library, export
+        if native_accessor then library, export = native_accessor() end
+        if not library then return false end
+        frame_generation_decided = true
+        local function state(name)
+            if not export(library, name) then return nil end
+            return tonumber(library[name]())
+        end
+        local generated = state("dtvr_generated_stereo_state")
+        suppress_frame_generation = state("dtvr_bootstrap_state") == 1 and generated == 0
+        mod:info("DARKTIDEVR_FRAME_GENERATION generated_stereo=%s user_dlss_g=%s policy=%s",
+            generated == nil and "unknown" or tostring(generated == 1),
+            user_boolean("dlss_g_enabled"),
+            suppress_frame_generation and "forced_off" or "user")
+        return true
+    end
     local function enforce()
         -- Startup reconciliation can replace the launcher's windowed setting.
         -- Keep the VR mirror in window mode at the engine apply boundary too.
@@ -40,10 +77,21 @@ function VisualSettings.install(mod)
         for key in pairs(qualities) do
             Application.set_user_setting("master_render_settings", key, "off")
         end
+        if suppress_frame_generation then
+            for key in pairs(frame_generation) do
+                Application.set_user_setting("render_settings", key, false)
+                Application.set_render_setting(key, "false")
+            end
+            for key in pairs(frame_generation_master) do
+                Application.set_user_setting("master_render_settings", key, 0)
+            end
+        end
     end
 
     mod:hook(Application, "set_render_setting", function(func, key, value, ...)
-        if disabled[key] then value = "false" end
+        if disabled[key] or (suppress_frame_generation and frame_generation[key]) then
+            value = "false"
+        end
         return func(key, value, ...)
     end)
     mod:hook(Application, "set_user_setting", function(func, location, key, ...)
@@ -57,19 +105,28 @@ function VisualSettings.install(mod)
         end
         local policy = location == "render_settings" and disabled or
             (location == "master_render_settings" and qualities)
+        local generation = suppress_frame_generation and
+            (location == "render_settings" and frame_generation or
+                (location == "master_render_settings" and frame_generation_master))
         if policy then
-            local forced = "off"
-            if location == "render_settings" then forced = false end
+            local forced, generation_forced = "off", 0
+            if location == "render_settings" then forced, generation_forced = false, false end
             if type(key) == "table" then
                 local copy = {}
                 for name, value in pairs(key) do copy[name] = value end
                 for name in pairs(policy) do copy[name] = forced end
+                if generation then
+                    for name in pairs(generation) do copy[name] = generation_forced end
+                end
                 return func(location, copy, ...)
             elseif policy[key] then
                 -- arity: deliberate. The tail begins at the value being
                 -- replaced, so forwarding it would pass the very setting this
                 -- is overriding back to the engine.
                 return func(location, key, forced)
+            elseif generation and generation[key] then
+                -- arity: deliberate, as above.
+                return func(location, key, generation_forced)
             end
         end
         return func(location, key, ...)
@@ -80,6 +137,10 @@ function VisualSettings.install(mod)
     end)
     local pending = true
     function VisualSettings.update()
+        if decide_frame_generation() and suppress_frame_generation and not pending then
+            -- The apply hook enforces the decision.
+            Application.apply_user_settings()
+        end
         if pending then
             pending = false
             enforce()
@@ -87,12 +148,6 @@ function VisualSettings.install(mod)
             mod:info("DARKTIDEVR_DISPLAY windowed=forced fullscreen=%s",
                 tostring(Application.is_fullscreen and Application.is_fullscreen()))
             mod:info("DARKTIDEVR_VISUAL_SETTINGS blur_dof_lens=forced_off")
-            local function user_boolean(key)
-                if not Application.user_setting then return "unavailable" end
-                local ok, value = pcall(Application.user_setting, "render_settings", key)
-                if ok and type(value) == "boolean" then return tostring(value) end
-                return "unavailable"
-            end
             mod:info("DARKTIDEVR_RAYTRACE user_reflections=%s user_rtxgi=%s",
                 user_boolean("rt_reflections_enabled"), user_boolean("rtxgi_enabled"))
             if Application.settings then

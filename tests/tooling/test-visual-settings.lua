@@ -96,4 +96,89 @@ ShadingEnvironment.apply(scene)
 local second_scene = {dof_enabled=1, exposure_compensation=-1}
 ShadingEnvironment.apply(second_scene)
 assert(second_scene.exposure_compensation == -1, 'second viewport lighting changed')
-print('VR visual settings: startup, presets, direct writes, apply and environment bypasses passed')
+
+-- Frame generation: a fresh module instance per case, against the player's
+-- saved choice of DLSS Frame Generation on.
+local function frame_generation_case(native, ready_after)
+    local instance = dofile(arg[1])
+    local user = {render_settings={dlss_g_enabled=true, dlss_g_frames_to_generate=1},
+        master_render_settings={dlss_g=1}}
+    local engine, decision, updates = {}, nil, 0
+    ShadingEnvironment = {set_scalar=function() end, apply=function() end}
+    Application = {
+        user_setting = function(location, key) return user[location][key] end,
+        set_user_setting = function(location, key, value)
+            if type(key) == 'table' then user[location] = key
+            elseif value ~= nil then
+                user[location] = user[location] or {}
+                user[location][key] = value
+            else user[location] = key end
+        end,
+        set_render_setting = function(key, value) engine[key] = value end,
+        apply_user_settings = function() end,
+    }
+    local frame_mod = {
+        hook = function(_, target, name, fn)
+            local original = target[name]
+            target[name] = function(...) return fn(original, ...) end
+        end,
+        info = function(_, format, ...)
+            if format:find('DARKTIDEVR_FRAME_GENERATION', 1, true) then
+                assert(not decision, 'decided more than once')
+                decision = string.format(format, ...)
+            end
+        end,
+    }
+    instance.install(frame_mod, function()
+        if updates < (ready_after or 0) then return nil end
+        return native, function(library, name) return library[name] ~= nil end
+    end)
+    for _ = 1, (ready_after or 0) + 1 do
+        instance.update()
+        updates = updates + 1
+    end
+    return user, engine, decision
+end
+
+local unavailable = {dtvr_bootstrap_state=function() return 1 end,
+    dtvr_generated_stereo_state=function() return 0 end}
+local user, engine, decision = frame_generation_case(unavailable)
+assert(decision == 'DARKTIDEVR_FRAME_GENERATION generated_stereo=false user_dlss_g=true policy=forced_off',
+    tostring(decision))
+assert(user.render_settings.dlss_g_enabled == false and engine.dlss_g_enabled == 'false',
+    'generation the headset cannot receive must not run (Bimo, 25 October)')
+assert(user.master_render_settings.dlss_g == 0, 'the options menu must show it off')
+assert(user.render_settings.dlss_g_frames_to_generate == 1, 'unrelated setting changed')
+Application.set_user_setting('render_settings', 'dlss_g_enabled', true)
+Application.set_user_setting('master_render_settings', 'dlss_g', 1)
+Application.set_render_setting('dlss_g_enabled', 'true')
+assert(user.render_settings.dlss_g_enabled == false and user.master_render_settings.dlss_g == 0)
+assert(engine.dlss_g_enabled == 'false', 'a menu toggle re-enabled frame generation')
+local fg_preset = {dlss_g_enabled=true, upscaling_quality='balanced'}
+Application.set_user_setting('render_settings', fg_preset)
+assert(fg_preset.dlss_g_enabled == true, 'do not mutate the shared preset')
+assert(user.render_settings.dlss_g_enabled == false and user.render_settings.dof_enabled == false)
+assert(user.render_settings.upscaling_quality == 'balanced', 'graphics quality changed')
+Application.set_user_setting('master_render_settings', 'texture_quality', 'high')
+assert(user.master_render_settings.texture_quality == 'high', 'graphics quality changed')
+
+user, engine, decision = frame_generation_case({dtvr_bootstrap_state=function() return 1 end,
+    dtvr_generated_stereo_state=function() return 1 end})
+assert(decision == 'DARKTIDEVR_FRAME_GENERATION generated_stereo=true user_dlss_g=true policy=user', tostring(decision))
+assert(user.render_settings.dlss_g_enabled == true and engine.dlss_g_enabled == nil)
+Application.set_user_setting('master_render_settings', 'dlss_g', 1)
+assert(user.master_render_settings.dlss_g == 1, 'a working headset path keeps the choice')
+
+user, engine, decision = frame_generation_case({dtvr_bootstrap_state=function() return 0 end,
+    dtvr_generated_stereo_state=function() return 0 end})
+assert(decision:find('policy=user', 1, true) and user.render_settings.dlss_g_enabled == true,
+    'flat play keeps its frame generation')
+
+user, engine, decision = frame_generation_case({dtvr_bootstrap_state=function() return 1 end})
+assert(decision == 'DARKTIDEVR_FRAME_GENERATION generated_stereo=unknown user_dlss_g=true policy=user', tostring(decision))
+assert(user.render_settings.dlss_g_enabled == true, 'an older module without the export is unchanged')
+
+user, engine, decision = frame_generation_case(unavailable, 2)
+assert(decision and decision:find('policy=forced_off', 1, true), 'a late native module still decides')
+assert(user.render_settings.dlss_g_enabled == false and engine.dlss_g_enabled == 'false')
+print('VR visual settings: startup, presets, direct writes, apply, environment bypasses and frame generation passed')

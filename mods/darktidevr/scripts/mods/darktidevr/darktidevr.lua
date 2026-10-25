@@ -735,6 +735,7 @@ local function ensure_ui_native_hooks()
         int dtvr_viewer_control(int enabled);
         int dtvr_viewer_state(int* values, unsigned int count);
         int dtvr_bootstrap_state(void);
+        int dtvr_generated_stereo_state(void);
         int dtvr_set_virtual_client_extent(int enabled);
         int dtvr_set_virtual_size_message(int enabled);
         int dtvr_lock_swapchain_client_extent(int enabled);
@@ -17065,7 +17066,10 @@ end)
 presentation.visual_settings = mod:io_dofile(
     "darktidevr/scripts/mods/darktidevr/darktidevr_visual_settings"
 )
-presentation.visual_settings.install(mod)
+presentation.visual_settings.install(mod, function()
+    if not (ensure_ui_native_hooks() and ui_native_capture) then return nil end
+    return ui_native_capture, presentation.native_export
+end)
 
 do
     -- Isolated gameplay eye targets are the play default; a present flag

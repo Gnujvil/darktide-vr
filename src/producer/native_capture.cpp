@@ -15977,6 +15977,12 @@ dtvr_install_for_device(ID3D12Device* device) {
 extern "C" __declspec(dllexport) int dtvr_bootstrap_state() {
   return bootstrap_install_state.load(std::memory_order_acquire);
 }
+// Whether the game's DLSS Frame Generation output can reach the headset. The
+// generated-stereo path installs only for the verified NGX runtime; with any
+// other driver the game still generates, but only for the desktop swapchain.
+extern "C" __declspec(dllexport) int dtvr_generated_stereo_state() {
+  return darktidevr::producer::generated_stereo_enabled() ? 1 : 0;
+}
 extern "C" __declspec(dllexport) int dtvr_set_projection_active(int enabled) {
   const auto event = shared_projection_active_event();
   if (!event) {
