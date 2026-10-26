@@ -694,7 +694,9 @@ try {
 
         $r = Invoke-Launcher $L1 (@('--cli', 'vr') + $gameArgs)
         Check 'uninstall setup: VR on again (mod reinstalled)' ($r.ExitCode -eq 0 -and (Value $r 'vr_mode') -eq 'true') "$($r.Output)$($r.Error)"
-        $r = Invoke-Launcher $L1 (@('--cli', 'uninstall', '--remove-mod-loader', '--remove-data') + $gameArgs)
+        # The fake Steam: with the real one, uninstall would remove this PC's own
+        # launch option and SteamVR entry (or refuse while Steam runs).
+        $r = Invoke-Launcher $L1 (@('--cli', 'uninstall', '--remove-mod-loader', '--remove-data') + $steamArgs)
         $after = Get-TreeHashes $script:Game
         $extra = @($after.Keys | Where-Object { -not $initialTree.ContainsKey($_) })
         $changed = @($initialTree.Keys | Where-Object { $after[$_] -ne $initialTree[$_] })

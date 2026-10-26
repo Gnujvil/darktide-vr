@@ -127,6 +127,11 @@ namespace DarktideVR.Launcher.Core
         // Darktide's launch options before the launcher added its own.
         [DataMember(Name = "previous_launch_options")] public string PreviousLaunchOptions { get; set; }
         [DataMember(Name = "last_launch")] public string LastLaunch { get; set; }
+        // "off" once the player chose their own VR settings; otherwise VR is
+        // sized to this PC (Tuning.cs), once per graphics card and memory.
+        [DataMember(Name = "vr_tuning")] public string VrTuning { get; set; }
+        [DataMember(Name = "tuned_signature")] public string TunedSignature { get; set; }
+        [DataMember(Name = "tuned_changes")] public List<TunedChange> TunedChanges { get; set; } = new List<TunedChange>();
     }
 
     [DataContract]

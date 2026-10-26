@@ -22,6 +22,11 @@ enum class MirrorMode {
 struct OutputLayoutRequest {
   PixelExtent runtime_recommended_eye{};
   std::optional<PixelExtent> eye_override;
+  // The most pixels per eye the runtime's recommendation may keep. The
+  // launcher sizes it to the graphics card: SteamVR asks a Quest 3 for
+  // 2528x2704, which a 12 GB card cannot hold alongside the game. The aspect
+  // is kept; an explicit override is never capped.
+  std::optional<std::uint64_t> eye_pixel_cap;
   MirrorMode mirror_mode{MirrorMode::left_eye};
   PixelExtent mirror_extent{1280, 720};
 };

@@ -146,6 +146,20 @@ namespace DarktideVR.Launcher
                 case "steam-status":
                     PrintSteam(engine);
                     return 0;
+                case "tuning":
+                    var hardware = engine.Hardware;
+                    var plan = engine.Tuning;
+                    Out($"gpu={hardware.GpuName}");
+                    Out($"gpu_memory_mb={hardware.GpuMemoryBytes >> 20}");
+                    Out($"ram_gb={Engine.Gigabytes(hardware.RamBytes)}");
+                    Out($"free_ram_gb={Engine.Gigabytes(hardware.FreeRamBytes)}");
+                    Out($"tuning={(engine.TuningOn ? "on" : "off")}");
+                    Out($"tuning_class={plan.Size}");
+                    Out($"eye_pixel_cap={plan.EyePixelCap}");
+                    foreach (var cap in plan.Caps) Out($"cap={cap.Key}:{cap.Value}");
+                    Out($"tuned={Flag(engine.Tuned)}");
+                    foreach (var change in engine.State.TunedChanges) Out($"lowered={change.Key}:{change.From}->{change.To}");
+                    return 0;
                 case "decide":
                     var root = engine.GameRoot ?? engine.FindGame() ?? throw new LauncherException("Darktide wasn't found.");
                     var decision = await LaunchDecider.DecideAsync(root, engine.State);
@@ -246,6 +260,46 @@ namespace DarktideVR.Launcher
             Check("args: spaces quoted", SteamLaunch.QuoteArgument(@"C:\Program Files\x.exe") == "\"C:\\Program Files\\x.exe\"");
             Check("args: trailing backslash doubled", SteamLaunch.QuoteArgument(@"C:\a b\") == "\"C:\\a b\\\\\"");
             Check("args: inner quote escaped", SteamLaunch.QuoteArgument("a\"b") == "\"a\\\"b\"");
+
+            const long Mb = 1L << 20;
+            Check("tuning: 16 GB cards keep everything", TuningPlan.For(16376 * Mb).ChangesNothing);
+            Check("tuning: an unread card changes nothing", TuningPlan.For(0).ChangesNothing);
+            var twelve = TuningPlan.For(12011 * Mb);
+            Check("tuning: 12 GB caps the eye at 2112x2304 and reflections off", twelve.EyePixelCap == 2112L * 2304 &&
+                twelve.Caps["ssr_quality"] == "off" && twelve.Caps["light_quality"] == "high" && twelve.Caps["volumetric_fog_quality"] == "high");
+            Check("tuning: 8 GB lowers shadows to medium", TuningPlan.For(8019 * Mb).Caps["light_quality"] == "medium");
+
+            // Bimo's VR profile in the game's layout, with Windows line ends.
+            string Settings(string preset) => string.Join("\r\n",
+                "master_render_settings = {", $"\tgraphics_quality = \"{preset}\"", "\tlight_quality = \"extreme\"",
+                "\tssr_quality = \"high\"", "\ttexture_quality = \"high\"", "\tvolumetric_fog_quality = \"extreme\"", "}",
+                "render_settings = {", "\tlocal_lights_shadow_atlas_size = [", "\t\t4096", "\t\t4096", "\t]", "\tssr_enabled = true",
+                "\tssr_high_quality = true", "\tvolumetric_data_size = [", "\t\t144", "\t\t112", "\t\t196", "\t]",
+                "\tvolumetric_reprojection_amount = -0.875", "}", "mods_settings = {", "}", "");
+            var bimo = new SettingsFile(Settings("custom"));
+            var lowered = PcTuning.Lower(bimo, twelve);
+            var text = bimo.ToString();
+            Check("tuning: the three settings lowered as the menu would", lowered.Count == 3 &&
+                bimo.Get("master_render_settings", "ssr_quality") == "off" && bimo.Get("render_settings", "ssr_enabled") == "false" &&
+                text.Contains("\tlocal_lights_shadow_atlas_size = [\r\n\t\t2048\r\n\t\t2048\r\n\t]") &&
+                text.Contains("\tvolumetric_data_size = [\r\n\t\t128\r\n\t\t96\r\n\t\t160\r\n\t]") &&
+                bimo.Get("render_settings", "volumetric_reprojection_amount") == "0");
+            Check("tuning: other settings and line ends kept", bimo.Get("master_render_settings", "texture_quality") == "high" &&
+                text.Replace("\r\n", "").IndexOf('\n') < 0 && text.Contains("\tvolumetric_volumes_enabled = true\r\n}\r\nmods_settings = {"));
+            Check("tuning: lowering twice changes nothing more", PcTuning.Lower(bimo, twelve).Count == 0 && bimo.ToString() == text);
+            bimo.Set("master_render_settings", "light_quality", "\"medium\"");
+            Check("tuning: undo restores, except what the player changed since", PcTuning.Restore(bimo, lowered) == 2 &&
+                bimo.Get("master_render_settings", "ssr_quality") == "high" && bimo.Get("render_settings", "ssr_high_quality") == "true" &&
+                bimo.Get("master_render_settings", "volumetric_fog_quality") == "extreme" &&
+                bimo.ToString().Contains("\tvolumetric_data_size = [\r\n\t\t144\r\n\t\t112\r\n\t\t196\r\n\t]") &&
+                bimo.Get("master_render_settings", "light_quality") == "medium");
+            var preset = new SettingsFile(Settings("high"));
+            var presetChanges = PcTuning.Lower(preset, twelve);
+            Check("tuning: a preset becomes custom, and comes back", preset.Get("master_render_settings", "graphics_quality") == "custom" &&
+                PcTuning.Restore(preset, presetChanges) == 4 && preset.Get("master_render_settings", "graphics_quality") == "high");
+            var merged = PcTuning.Merge(new List<TunedChange> { new TunedChange { Key = "light_quality", From = "extreme", To = "high" } },
+                new[] { new TunedChange { Key = "light_quality", From = "high", To = "medium" } });
+            Check("tuning: tuning again keeps the player's first choice to undo to", merged.Count == 1 && merged[0].From == "extreme" && merged[0].To == "medium");
 
             output(failures.Count == 0 ? "selftest=pass" : $"selftest=FAIL ({failures.Count})");
             return failures.Count == 0 ? 0 : 1;

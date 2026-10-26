@@ -53,6 +53,17 @@ namespace DarktideVR.Launcher
         public const string XrRunning = "Running.";
         public const string XrUntested = "This runtime hasn't been tested with Darktide VR; it may still work.";
 
+        public const string RowTune = "VR graphics for this PC";
+        public const string TuneNoCard = "Couldn't read the graphics card, so VR's settings are left as they are.";
+        public const string TuneOff = "Off: VR uses your own settings and the headset's full resolution.";
+        public const string TuneNothing = "VR keeps your settings and the headset's full resolution.";
+        public const string TunePending = "Reflections, shadows and fog are lowered where needed when VR next starts.";
+        public const string TuneWithin = "Your graphics settings already fit.";
+        public const string TuneFlatUntouched = "Flat play isn't changed.";
+        public const string TuneLowRam = "Only {0} GB of memory is free: close other programs before playing in VR.";
+        public const string TuneOn = "Tune for this PC";
+        public const string TuneUseOwn = "Use my own settings";
+
         public const string RowSteam = "Start from Steam and VR headsets";
         public const string SteamNotFound = "Steam wasn't found.";
         public const string SteamOff =

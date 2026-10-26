@@ -184,9 +184,11 @@ class OpenXrProbe {
  public:
   explicit OpenXrProbe(
       bool enabled = true, bool suggest_simple_profile = true,
-      std::optional<darktidevr::core::PixelExtent> eye_extent_override = {})
+      std::optional<darktidevr::core::PixelExtent> eye_extent_override = {},
+      std::optional<std::uint64_t> eye_pixel_cap = {})
       : suggest_simple_profile_(suggest_simple_profile),
-        eye_extent_override_(eye_extent_override) {
+        eye_extent_override_(eye_extent_override),
+        eye_pixel_cap_(eye_pixel_cap) {
     if (!enabled) {
       std::cout << "openxr.discovery=disabled\n";
       return;
@@ -370,6 +372,7 @@ class OpenXrProbe {
       request.runtime_recommended_eye = {views_.front().recommendedImageRectWidth,
                                          views_.front().recommendedImageRectHeight};
       request.eye_override = eye_extent_override_;
+      request.eye_pixel_cap = eye_pixel_cap_;
       const auto layout = darktidevr::core::choose_output_layout(request);
       if (layout.eye_extent.width != views_.front().recommendedImageRectWidth ||
           layout.eye_extent.height != views_.front().recommendedImageRectHeight) {
@@ -6814,6 +6817,7 @@ class OpenXrProbe {
   bool canted_views_reported_{};
   bool suggest_simple_profile_{true};
   std::optional<darktidevr::core::PixelExtent> eye_extent_override_;
+  std::optional<std::uint64_t> eye_pixel_cap_;
   std::optional<XrGraphicsRequirementsD3D12KHR> requirements_;
   std::vector<XrViewConfigurationView> views_;
   std::vector<XrSwapchain> swapchains_;
@@ -7259,6 +7263,28 @@ std::wstring redirect_viewer_log() {
   return path;
 }
 
+// The launcher's eye resolution cap for this PC's graphics card, in pixels
+// per eye, from `darktidevr_eye_pixel_cap.flag` beside the mod. A file like
+// the viewer's other switches, because Steam starts the game and the viewer
+// never sees the launcher's environment. Unlike them the contents are read:
+// one decimal number. Absent or unreadable means the runtime's resolution.
+std::optional<std::uint64_t> read_eye_pixel_cap() {
+  std::wstring directory(32768, L'\0');
+  const auto length = GetModuleFileNameW(nullptr, directory.data(), 32768);
+  if (length == 0 || length >= 32768) return std::nullopt;
+  directory.resize(length);
+  const auto separator = directory.find_last_of(L"\\/");
+  if (separator == std::wstring::npos) return std::nullopt;
+  directory.resize(separator + 1);
+  std::ifstream file(std::filesystem::path{
+      directory + L"..\\darktidevr_eye_pixel_cap.flag"});
+  std::uint64_t cap{};
+  if (!(file >> cap) || cap < 640ULL * 640ULL || cap > 7680ULL * 7680ULL) {
+    return std::nullopt;
+  }
+  return cap;
+}
+
 int wmain(int argc, wchar_t** argv) {
   try {
     const auto viewer_log = redirect_viewer_log();
@@ -7575,7 +7601,14 @@ int wmain(int argc, wchar_t** argv) {
 
     darktidevr::xr::RuntimeD3D11Diagnostics runtime_diagnostics(
         runtime_d3d11_diagnostics,probe_shared_import_adapters);
-    OpenXrProbe openxr(!no_openxr, suggest_simple_profile, eye_extent_override);
+    const auto eye_pixel_cap = read_eye_pixel_cap();
+    if (eye_pixel_cap) {
+      std::cout << "openxr.eye_pixel_cap=" << *eye_pixel_cap
+                << (eye_extent_override ? " ignored=eye_extent_pinned" : "")
+                << '\n';
+    }
+    OpenXrProbe openxr(!no_openxr, suggest_simple_profile, eye_extent_override,
+                       eye_pixel_cap);
     Harness harness(show, debug_layer, openxr.adapter_luid(),
                     openxr.minimum_feature_level());
     openxr.create_session(harness.device(), harness.queue(), !theatre);

@@ -458,6 +458,7 @@ namespace DarktideVR.Launcher.Core
                 var vr = await ModeScript.RunAsync(root, "vr");
                 if (vr.Ok)
                 {
+                    engine.TuneVr(root);
                     engine.RecordLaunch($"VR ({decision.Reason})");
                     return decision.RuntimeManifest;
                 }
@@ -523,7 +524,8 @@ namespace DarktideVR.Launcher.Core
                 {
                     if (Dependencies.ModLoaderPresent(root) && Dependencies.PatchToolPresent(root)) await Dependencies.EnableModsAsync(root);
                     var vr = await ModeScript.RunAsync(root, "vr");
-                    if (!vr.Ok) Log.Warn("SteamVR library launch: VR mode couldn't be switched on: " + vr.Message);
+                    if (vr.Ok) engine.TuneVr(root);
+                    else Log.Warn("SteamVR library launch: VR mode couldn't be switched on: " + vr.Message);
                     if (runtime != null)
                         Log.Warn("SteamVR library launch: without the Steam launch option the game uses the default OpenXR runtime, not SteamVR. Set up Steam in the launcher to fix this.");
                 }

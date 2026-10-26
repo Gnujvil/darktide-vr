@@ -45,6 +45,28 @@ int main() {
                without_mirror.mirror_extent == PixelExtent{},
            "Disabling the mirror must preserve headset resolution");
 
+    // SteamVR's Quest 3 recommendation on a 12 GB card: scaled to the cap,
+    // aspect kept, both sides a multiple of 8.
+    OutputLayoutRequest steamvr{{2528, 2704}};
+    steamvr.eye_pixel_cap = 2112ULL * 2304ULL;
+    const auto capped = choose_output_layout(steamvr);
+    expect(capped.eye_extent == PixelExtent{2128, 2280},
+           "An eye pixel cap must scale the recommendation to fit");
+    expect(std::uint64_t{capped.eye_extent.width} * capped.eye_extent.height <=
+               *steamvr.eye_pixel_cap,
+           "A capped extent must not exceed the cap");
+
+    OutputLayoutRequest within{{2112, 2304}};
+    within.eye_pixel_cap = 2112ULL * 2304ULL;
+    expect(choose_output_layout(within).eye_extent == PixelExtent{2112, 2304},
+           "A recommendation within the cap must be kept exactly");
+
+    OutputLayoutRequest pinned{{2528, 2704}};
+    pinned.eye_pixel_cap = 1000ULL * 1000ULL;
+    pinned.eye_override = PixelExtent{2528, 2704};
+    expect(choose_output_layout(pinned).eye_extent == PixelExtent{2528, 2704},
+           "An explicit eye resolution must not be capped");
+
     bool rejected{};
     try {
       (void)choose_output_layout({{0, 2880}});

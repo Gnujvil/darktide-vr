@@ -72,6 +72,7 @@ namespace DarktideVR.Launcher.Core
                     if (state != null)
                     {
                         if (state.OwnedFiles == null) state.OwnedFiles = new List<OwnedFile>();
+                        if (state.TunedChanges == null) state.TunedChanges = new List<TunedChange>();
                         return state;
                     }
                 }
@@ -124,6 +125,7 @@ namespace DarktideVR.Launcher.Core
 
         public async Task<Snapshot> InspectAsync()
         {
+            hardware = null; // free memory changes between refreshes
             var snapshot = new Snapshot { GameRoot = GameRoot ?? FindGame(), Xr = XrRuntime.Detect() };
             snapshot.GameFound = snapshot.GameRoot != null;
             snapshot.DarktideRunning = GameLocator.IsDarktideRunning(snapshot.GameRoot);
@@ -229,6 +231,8 @@ namespace DarktideVR.Launcher.Core
 
             if (!wasVr) return null;
             var vr = await ModeScript.RunAsync(root, "vr");
+            // The new mod folder has no resolution cap yet.
+            if (vr.Ok) TuneVr(root);
             return vr.Ok ? null : "The mod was updated, but VR mode couldn't be switched back on: " + vr.Message;
         }
 
@@ -291,6 +295,7 @@ namespace DarktideVR.Launcher.Core
                         throw new LauncherException(Strings.GameBuildUnsupported);
                     throw new LauncherException("VR mode couldn't be switched on: " + result.Message);
                 }
+                TuneVr(root);
             }
             else
             {
@@ -484,6 +489,105 @@ namespace DarktideVR.Launcher.Core
             SaveState();
         }
 
+        // ---- VR tuning ---------------------------------------------------------
+
+        PcHardware hardware;
+        public PcHardware Hardware => hardware ?? (hardware = PcHardware.Detect());
+        public TuningPlan Tuning => TuningPlan.For(Hardware.GpuMemoryBytes);
+        public bool TuningOn => State.VrTuning != "off";
+        public bool Tuned => TuningOn && State.TunedSignature == Hardware.Signature;
+
+        // Sizes VR to this PC right before the game starts in VR, and after a
+        // mod update replaced the folder the resolution cap lives in. The
+        // settings are lowered once per card, so what the player changes
+        // afterwards stays. Never stops a launch: a failure changes nothing.
+        public void TuneVr(string root)
+        {
+            try
+            {
+                var plan = Tuning;
+                WriteEyePixelCap(root, TuningOn ? plan.EyePixelCap : 0);
+                if (Hardware.FreeRamBytes > 0 && Hardware.FreeRamBytes < FreeRamWarning)
+                    Log.Warn($"Only {Gigabytes(Hardware.FreeRamBytes)} GB of memory is free for VR.");
+                if (Tuned || !TuningOn) return;
+                // No VR settings yet: tuned once the game has written them.
+                var path = VrSettingsPath();
+                if (path == null) return;
+                var settings = new SettingsFile(File.ReadAllText(path));
+                var changes = PcTuning.Lower(settings, plan);
+                if (changes.Count > 0) WriteSettings(path, settings);
+                State.TunedChanges = PcTuning.Merge(State.TunedChanges, changes);
+                State.TunedSignature = Hardware.Signature;
+                SaveState();
+                Log.Info($"VR tuned for {Hardware.GpuName} ({Gigabytes(Hardware.GpuMemoryBytes)} GB, {plan.Size} class): " +
+                         (plan.EyePixelCap > 0 ? $"at most about {plan.EyeExtent} per eye" : "full resolution") +
+                         (changes.Count > 0 ? "; " + string.Join(", ", changes.Select(PcTuning.Describe).Where(d => d != null)) : "; no settings needed lowering"));
+            }
+            catch (Exception error) { Log.Warn("VR tuning skipped: " + error.Message); }
+        }
+
+        // "Use my own settings" puts lowered settings back (unless the player
+        // changed them since) and drops the resolution cap; on again tunes now.
+        public string SetVrTuning(bool on)
+        {
+            var root = GameRoot;
+            if (root != null) RequireClosed(root);
+            if (on)
+            {
+                State.VrTuning = null;
+                State.TunedSignature = null;
+                SaveState();
+                if (root != null) TuneVr(root);
+                return "VR is tuned for this PC.";
+            }
+            var path = VrSettingsPath();
+            if (path != null && State.TunedChanges.Count > 0)
+            {
+                var settings = new SettingsFile(File.ReadAllText(path));
+                if (PcTuning.Restore(settings, State.TunedChanges) > 0) WriteSettings(path, settings);
+            }
+            State.VrTuning = "off";
+            State.TunedSignature = null;
+            State.TunedChanges = new List<TunedChange>();
+            SaveState();
+            if (root != null) WriteEyePixelCap(root, 0);
+            Log.Info("VR tuning is off: the player's own settings and the headset's full resolution.");
+            return "VR uses your own settings.";
+        }
+
+        public const long FreeRamWarning = 6L << 30;
+        public static string Gigabytes(long bytes) => (bytes / (double)(1L << 30)).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+
+        static void WriteEyePixelCap(string root, long cap)
+        {
+            if (!ModPackage.Installed(root)) return;
+            var flag = Path.Combine(ModPackage.ModDirectory(root), PcTuning.CapFlagName);
+            if (cap > 0) Files.WriteWhole(flag, System.Text.Encoding.ASCII.GetBytes(cap.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\n"));
+            else if (File.Exists(flag)) File.Delete(flag);
+        }
+
+        // The VR profile: the game's own file while VR mode is on, otherwise
+        // the copy the mode switch keeps for it (darktidevr-mode.ps1).
+        static string VrSettingsPath()
+        {
+            var marker = Path.Combine(Paths.DataRoot, "settings-profile.txt");
+            var vrOn = File.Exists(marker) && File.ReadAllText(marker).Trim() == "vr";
+            var path = vrOn
+                ? Path.Combine(Paths.RoamingAppData, "Fatshark", "Darktide", "user_settings.config")
+                : Path.Combine(Paths.DataRoot, "user_settings.vr.config");
+            return File.Exists(path) ? path : null;
+        }
+
+        // A copy first, beside the mod's own settings backups but named so the
+        // mode script never restores from it.
+        static void WriteSettings(string path, SettingsFile settings)
+        {
+            var backups = Path.Combine(Paths.DataRoot, "settings-backups");
+            Directory.CreateDirectory(backups);
+            File.Copy(path, Path.Combine(backups, $"user_settings.before-tuning-{DateTime.Now:yyyyMMdd-HHmmss}.config"), true);
+            Files.WriteWhole(path, System.Text.Encoding.UTF8.GetBytes(settings.ToString()));
+        }
+
         // ---- support -----------------------------------------------------------
 
         public async Task<string> CreateSupportZipAsync()
@@ -500,6 +604,9 @@ namespace DarktideVR.Launcher.Core
                 summary.AppendLine($"mod_loader={snapshot.ModLoaderPresent} mods_enabled={snapshot.ModsEnabled} framework={snapshot.FrameworkPresent}");
                 summary.AppendLine($"mod_installed={snapshot.ModInstalled} version={snapshot.InstalledVersion} vortex={snapshot.VortexManagesMod}");
                 summary.AppendLine($"xr={snapshot.Xr.DisplayName} manifest={snapshot.Xr.ManifestPath} service_running={snapshot.Xr.ServiceRunning}");
+                summary.AppendLine($"gpu={Hardware.GpuName} gpu_memory_mb={Hardware.GpuMemoryBytes >> 20} ram_gb={Gigabytes(Hardware.RamBytes)} free_ram_gb={Gigabytes(Hardware.FreeRamBytes)}");
+                summary.AppendLine($"vr_tuning={(TuningOn ? "on" : "off")} tuned={Tuned} eye_pixel_cap={(TuningOn ? Tuning.EyePixelCap : 0)} lowered=" +
+                                   string.Join(",", State.TunedChanges.Select(c => $"{c.Key}:{c.From}->{c.To}")));
                 summary.AppendLine();
                 summary.AppendLine(snapshot.Status?.Output ?? "(mode script not run)");
                 var entry = zip.CreateEntry("summary.txt");

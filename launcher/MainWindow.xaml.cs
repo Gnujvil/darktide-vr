@@ -58,6 +58,7 @@ namespace DarktideVR.Launcher
         readonly SetupRow rowMod = new SetupRow { Key = "mod", Title = Strings.RowMod };
         readonly SetupRow rowBuild = new SetupRow { Key = "build", Title = Strings.RowGameBuild };
         readonly SetupRow rowXr = new SetupRow { Key = "xr", Title = Strings.RowXr };
+        readonly SetupRow rowTune = new SetupRow { Key = "tune", Title = Strings.RowTune };
         readonly SetupRow rowSteam = new SetupRow { Key = "steam", Title = Strings.RowSteam };
         readonly CancellationTokenSource closing = new CancellationTokenSource();
         Snapshot snapshot;
@@ -88,7 +89,7 @@ namespace DarktideVR.Launcher
             PlayVrButton.Content = Strings.PlayVr;
             BannerButton.Content = Strings.UpdateNow;
 
-            RowList.ItemsSource = new ObservableCollection<SetupRow> { rowGame, rowLoader, rowFramework, rowMod, rowBuild, rowXr, rowSteam };
+            RowList.ItemsSource = new ObservableCollection<SetupRow> { rowGame, rowLoader, rowFramework, rowMod, rowBuild, rowXr, rowTune, rowSteam };
             foreach (var row in (ObservableCollection<SetupRow>)RowList.ItemsSource) row.Show(RowState.Busy, Strings.Checking);
 
             LoadLogTail();
@@ -217,6 +218,8 @@ namespace DarktideVR.Launcher
             else if (xr.ServiceRunning) rowXr.Show(RowState.Ok, $"{xr.DisplayName}: {Strings.XrRunning}" + (xr.Tested ? "" : " " + Strings.XrUntested));
             else rowXr.Show(RowState.Warn, $"{xr.DisplayName} isn't running. {Strings.XrStart}");
 
+            ShowTuning();
+
             var steam = engine.SteamStatus();
             var lastLaunch = steam.LastLaunch != null ? $" Last Steam launch: {steam.LastLaunch}." : "";
             if (!steam.SteamFound) rowSteam.Show(RowState.Unknown, Strings.SteamNotFound);
@@ -338,6 +341,28 @@ namespace DarktideVR.Launcher
             });
         }
 
+        void ShowTuning()
+        {
+            var hardware = engine.Hardware;
+            var plan = engine.Tuning;
+            var lowRam = hardware.FreeRamBytes > 0 && hardware.FreeRamBytes < Engine.FreeRamWarning
+                ? " " + string.Format(Strings.TuneLowRam, Engine.Gigabytes(hardware.FreeRamBytes)) : "";
+            var state = lowRam.Length > 0 ? RowState.Warn : RowState.Ok;
+            var card = $"{hardware.GpuName} ({Engine.Gigabytes(hardware.GpuMemoryBytes)} GB)";
+            if (hardware.GpuName == null) rowTune.Show(RowState.Unknown, Strings.TuneNoCard + lowRam);
+            else if (!engine.TuningOn) rowTune.Show(RowState.Unknown, Strings.TuneOff + lowRam, Strings.TuneOn);
+            else if (plan.ChangesNothing) rowTune.Show(state, $"{card}: {Strings.TuneNothing}" + lowRam);
+            else
+            {
+                var lowered = engine.State.TunedChanges.Select(PcTuning.Describe).Where(d => d != null).ToList();
+                var settings = !engine.Tuned ? Strings.TunePending
+                    : lowered.Count == 0 ? Strings.TuneWithin
+                    : "Lowered: " + string.Join(", ", lowered) + ".";
+                rowTune.Show(state, $"{card}: VR renders at most about {plan.EyeExtent} per eye. {settings} {Strings.TuneFlatUntouched}" + lowRam,
+                    Strings.TuneUseOwn);
+            }
+        }
+
         async void RowAction_Click(object sender, RoutedEventArgs e)
         {
             var row = (SetupRow)((Button)sender).Tag;
@@ -361,6 +386,10 @@ namespace DarktideVR.Launcher
                     break;
                 case "mod":
                     await InstallModAsync();
+                    break;
+                case "tune":
+                    var on = row.ActionLabel == Strings.TuneOn;
+                    await RunAsync(Strings.Working, (p, s) => Task.Run(() => engine.SetVrTuning(on)));
                     break;
                 case "steam" when row.ActionLabel == Strings.Remove:
                     await RunAsync("Removing the Steam setup…", (p, s) => Task.FromResult(engine.RemoveSteam()));
