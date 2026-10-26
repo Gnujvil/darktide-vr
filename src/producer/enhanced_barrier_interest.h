@@ -2,8 +2,9 @@
 #include <d3d12.h>
 
 namespace darktidevr::producer {
-// The protected bookkeeping only logs textures or records PRESENT targets.
-// PRESENT aliases COMMON, so COMMON must conservatively take this path too.
+// The protected bookkeeping logs textures, records PRESENT targets and
+// matches eye finals leaving RENDER_TARGET. PRESENT aliases COMMON, so
+// COMMON must conservatively take this path too.
 inline bool enhanced_barriers_need_capture_lock(
     UINT32 count, const D3D12_BARRIER_GROUP* groups, bool log_resources) noexcept {
   if (!groups) return false;
@@ -12,8 +13,9 @@ inline bool enhanced_barriers_need_capture_lock(
     if (group.Type != D3D12_BARRIER_TYPE_TEXTURE || !group.pTextureBarriers)
       continue;
     for (UINT32 index = 0; index < group.NumBarriers; ++index) {
-      if (log_resources ||
-          group.pTextureBarriers[index].LayoutAfter == D3D12_BARRIER_LAYOUT_PRESENT)
+      const auto& barrier = group.pTextureBarriers[index];
+      if (log_resources || barrier.LayoutAfter == D3D12_BARRIER_LAYOUT_PRESENT ||
+          barrier.LayoutBefore == D3D12_BARRIER_LAYOUT_RENDER_TARGET)
         return true;
     }
   }

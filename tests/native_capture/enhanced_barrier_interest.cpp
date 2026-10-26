@@ -17,6 +17,11 @@ int main() {
       enhanced_barriers_need_capture_lock(0, groups.data(), true) ||
       enhanced_barriers_need_capture_lock(3, groups.data(), false) ||
       !enhanced_barriers_need_capture_lock(3, groups.data(), true)) return 1;
+  // An eye final leaving RENDER_TARGET reaches the capture bookkeeping.
+  textures[1].LayoutBefore = D3D12_BARRIER_LAYOUT_RENDER_TARGET;
+  if (!enhanced_barriers_need_capture_lock(3, groups.data(), false)) return 6;
+  textures[1].LayoutBefore = D3D12_BARRIER_LAYOUT_SHADER_RESOURCE;
+  if (enhanced_barriers_need_capture_lock(3, groups.data(), false)) return 7;
   textures[1].LayoutAfter = D3D12_BARRIER_LAYOUT_PRESENT;
   if (!enhanced_barriers_need_capture_lock(3, groups.data(), false)) return 2;
   textures[1].LayoutAfter = D3D12_BARRIER_LAYOUT_COMMON;
@@ -26,5 +31,5 @@ int main() {
   groups[2].NumBarriers = 2;
   groups[2].pTextureBarriers = nullptr;
   if (enhanced_barriers_need_capture_lock(3, groups.data(), true)) return 5;
-  std::puts("enhanced_barrier_interest=pass mixed_groups diagnostic present common empty");
+  std::puts("enhanced_barrier_interest=pass mixed_groups diagnostic render_target_exit present common empty");
 }

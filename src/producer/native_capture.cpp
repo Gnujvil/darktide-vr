@@ -1208,6 +1208,10 @@ std::unordered_map<ID3D12GraphicsCommandList*, ComPtr<ID3D12Resource>>
     camera_output_resources;
 std::unordered_map<ID3D12GraphicsCommandList*, D3D12_RESOURCE_STATES>
     camera_output_source_states;
+// Set instead of the legacy state when the eye final's completion was seen
+// through an enhanced Barrier: the copy must leave and restore that layout.
+std::unordered_map<ID3D12GraphicsCommandList*, D3D12_BARRIER_LAYOUT>
+    camera_output_source_layouts;
 std::unordered_map<ID3D12GraphicsCommandList*, std::uint64_t>
     command_recording_generations;
 std::unordered_map<ID3D12GraphicsCommandList*, ComPtr<ID3D12Resource>>
@@ -1273,6 +1277,15 @@ std::array<std::atomic<std::uint64_t>, 2> boundary_eye_capture_counts{};
 std::array<std::atomic<std::uint64_t>, 2> boundary_eye_pose_sequences{};
 std::atomic<std::uint64_t> boundary_published_pair_pose{};
 std::atomic<std::uint64_t> boundary_tag_reset_count{};
+// How the eye finals' completions arrive: through the legacy ResourceBarrier
+// or through enhanced Barrier calls (Bimo, 25 October: armed captures never
+// matched while the game rendered stereo). Read by Lua into the console log.
+std::atomic<std::uint64_t> eye_output_legacy_completions{};
+std::atomic<std::uint64_t> eye_output_legacy_extent_completions{};
+std::atomic<std::uint64_t> enhanced_barrier_calls{};
+std::atomic<std::uint64_t> eye_output_enhanced_barriers{};
+std::atomic<std::uint64_t> eye_output_enhanced_completions{};
+std::atomic<std::uint32_t> eye_output_enhanced_last_layouts{};
 std::atomic<std::uint64_t> boundary_staged_eye0_pose_sequence{};
 std::atomic<float> boundary_staged_eye0_vertical_fov{};
 std::atomic<float> boundary_staged_eye0_aspect_ratio{};
@@ -1600,10 +1613,10 @@ std::unordered_set<std::uint64_t> dumped_pso_shader_mappings;
 
 int capture_present_halves(IDXGISwapChain3* swapchain,
                            ID3D12CommandQueue* queue);
-int capture_eye_from_resource(int eye, ID3D12CommandQueue* queue,
-                              ID3D12Resource* back_buffer,
-                              bool bypass_execute_hook,
-                              D3D12_RESOURCE_STATES source_state);
+int capture_eye_from_resource(
+    int eye, ID3D12CommandQueue* queue, ID3D12Resource* back_buffer,
+    bool bypass_execute_hook, D3D12_RESOURCE_STATES source_state,
+    std::optional<D3D12_BARRIER_LAYOUT> source_layout = std::nullopt);
 void write_focused_log(const char* format, ...);
 
 void write_cluster_trace_log(const char* format, ...) {
@@ -6410,6 +6423,7 @@ HRESULT STDMETHODCALLTYPE reset_hook(ID3D12GraphicsCommandList* commands,
     present_transition_resources.erase(commands);
     camera_output_resources.erase(commands);
     camera_output_source_states.erase(commands);
+    camera_output_source_layouts.erase(commands);
     // Menu completion belongs to the command-list recording just retired by
     // this successful Reset.  A list can be reset without ever being executed;
     // retaining these entries would make a later unrelated recording publish
@@ -9716,6 +9730,18 @@ void STDMETHODCALLTYPE resource_barrier_hook(
             barrier.Transition.StateAfter == shader_resource_state &&
             barrier.Flags == D3D12_RESOURCE_BARRIER_FLAG_NONE &&
             is_known_output;
+        if (is_completed_output) {
+          eye_output_legacy_completions.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (description.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+            camera_capture_extent_matches(description.Width,
+                                          description.Height) &&
+            barrier.Transition.StateBefore ==
+                D3D12_RESOURCE_STATE_RENDER_TARGET &&
+            barrier.Transition.StateAfter == shader_resource_state) {
+          eye_output_legacy_extent_completions.fetch_add(
+              1, std::memory_order_relaxed);
+        }
         if (census_enabled &&
             description.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
             camera_capture_extent_matches(description.Width,
@@ -9781,11 +9807,69 @@ void STDMETHODCALLTYPE resource_barrier_hook(
   darktidevr::producer::observe_ngx_output_barriers(commands, barrier_count, barriers);
 }
 
+bool readable_eye_output_layout(D3D12_BARRIER_LAYOUT layout) noexcept {
+  switch (layout) {
+    case D3D12_BARRIER_LAYOUT_SHADER_RESOURCE:
+    case D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_SHADER_RESOURCE:
+    case D3D12_BARRIER_LAYOUT_GENERIC_READ:
+    case D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_GENERIC_READ:
+    case D3D12_BARRIER_LAYOUT_COMMON:
+    case D3D12_BARRIER_LAYOUT_DIRECT_QUEUE_COMMON:
+      return true;
+    default:
+      return false;
+  }
+}
+
+// An eye final's completion recorded with an enhanced Barrier: the same
+// RENDER_TARGET -> read step the legacy hook matches. Used only while no
+// legacy completion has been seen, so a machine whose legacy path works is
+// unchanged. The caller holds boundary_capture_mutex.
+void observe_enhanced_eye_output(ID3D12GraphicsCommandList* commands,
+                                 const D3D12_TEXTURE_BARRIER& barrier) {
+  const auto description = barrier.pResource->GetDesc();
+  if (description.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D ||
+      !camera_capture_extent_matches(description.Width, description.Height)) {
+    return;
+  }
+  const auto eye = named_eye_final_index(barrier.pResource);
+  if (eye < 0) {
+    return;
+  }
+  eye_output_enhanced_barriers.fetch_add(1, std::memory_order_relaxed);
+  eye_output_enhanced_last_layouts.store(
+      (static_cast<std::uint32_t>(barrier.LayoutBefore) << 16) |
+          (static_cast<std::uint32_t>(barrier.LayoutAfter) & 0xffffU),
+      std::memory_order_relaxed);
+  if (!readable_eye_output_layout(barrier.LayoutAfter) ||
+      eye_output_legacy_completions.load(std::memory_order_relaxed) != 0) {
+    return;
+  }
+  named_camera_output_resources[static_cast<std::size_t>(eye)] =
+      barrier.pResource;
+  if (named_camera_output_resources[0] && named_camera_output_resources[1]) {
+    known_camera_output_resources.clear();
+    known_camera_output_resources.insert(named_camera_output_resources[0]);
+    known_camera_output_resources.insert(named_camera_output_resources[1]);
+    named_camera_outputs_ready = true;
+    named_camera_outputs_ready_hint.store(true, std::memory_order_release);
+  } else {
+    known_camera_output_resources.insert(barrier.pResource);
+  }
+  camera_output_resources[commands] = barrier.pResource;
+  camera_output_source_states[commands] =
+      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+  camera_output_source_layouts[commands] = barrier.LayoutAfter;
+  eye_output_enhanced_completions.fetch_add(1, std::memory_order_relaxed);
+}
+
 void STDMETHODCALLTYPE enhanced_barrier_hook(
     ID3D12GraphicsCommandList7* commands, UINT32 group_count,
     const D3D12_BARRIER_GROUP* groups) {
   darktidevr::producer::RenderApiCpuProfile::Scope api_cpu(
       darktidevr::producer::RenderApiCpuProfile::barrier);
+  enhanced_barrier_calls.fetch_add(1, std::memory_order_relaxed);
   if (billboard_readback_accepting.load(std::memory_order_relaxed)) {
     std::scoped_lock lock(trace_mutex);
     billboard_resource_states[commands].unknown();
@@ -9848,6 +9932,11 @@ void STDMETHODCALLTYPE enhanced_barrier_hook(
       for (UINT32 barrier_index = 0; barrier_index < group.NumBarriers;
            ++barrier_index) {
         const auto& barrier = group.pTextureBarriers[barrier_index];
+        if (barrier.pResource &&
+            barrier.LayoutBefore == D3D12_BARRIER_LAYOUT_RENDER_TARGET) {
+          observe_enhanced_eye_output(
+              static_cast<ID3D12GraphicsCommandList*>(commands), barrier);
+        }
         if (barrier.pResource && log_resources) {
           const auto description = barrier.pResource->GetDesc();
           if (description.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
@@ -11104,6 +11193,8 @@ void STDMETHODCALLTYPE execute_command_lists_hook(
   ID3D12GraphicsCommandList* completed_output_commands{};
   ComPtr<ID3D12Resource> completed_back_buffer;
   auto completed_source_state = D3D12_RESOURCE_STATE_RENDER_TARGET;
+  // Set when the completion was an enhanced Barrier; the copy then uses one.
+  std::optional<D3D12_BARRIER_LAYOUT> completed_source_layout;
   ComPtr<ID3D12Resource> completed_menu_output;
   bool executed_swapchain_present_transition{};
   auto completed_menu_source_state =
@@ -11205,6 +11296,10 @@ void STDMETHODCALLTYPE execute_command_lists_hook(
         if (state_found != camera_output_source_states.end()) {
           completed_source_state = state_found->second;
         }
+        const auto layout_found = camera_output_source_layouts.find(graphics);
+        if (layout_found != camera_output_source_layouts.end()) {
+          completed_source_layout = layout_found->second;
+        }
         const auto frame = present_count.load(std::memory_order_relaxed);
         const auto burst_until = resize_diagnostic_burst_until_present.load(
             std::memory_order_relaxed);
@@ -11231,6 +11326,7 @@ void STDMETHODCALLTYPE execute_command_lists_hook(
       }
       camera_output_resources.erase(found);
       camera_output_source_states.erase(graphics);
+      camera_output_source_layouts.erase(graphics);
       if (candidates_found != camera_output_candidates.end()) {
         candidates_found->second.clear();
       }
@@ -11359,7 +11455,9 @@ void STDMETHODCALLTYPE execute_command_lists_hook(
   }
   if (requested_eye >= 0 && completed_back_buffer) {
     end_gpu_eye_profile(requested_eye, queue);
-    if (native_original_ring &&
+    // The ring copies with legacy states; an enhanced completion uses the
+    // single-slot capture below, which the viewer falls back to.
+    if (native_original_ring && !completed_source_layout &&
         !darktidevr::producer::generated_stereo_enabled() &&
         current_presentation_mode.load(std::memory_order_relaxed) == 1 &&
         named_eye_final_index(completed_back_buffer.Get()) == requested_eye) {
@@ -11378,7 +11476,7 @@ void STDMETHODCALLTYPE execute_command_lists_hook(
     }
     const auto result = capture_eye_from_resource(
         requested_eye, queue, completed_back_buffer.Get(), true,
-        completed_source_state);
+        completed_source_state, completed_source_layout);
     const auto streamline_burst_until =
         streamline_native_burst_until_call.load(std::memory_order_acquire);
     if (streamline_probe_log != INVALID_HANDLE_VALUE &&
@@ -11598,6 +11696,7 @@ HRESULT STDMETHODCALLTYPE resize_buffers_hook(IDXGISwapChain* swapchain,
     swapchain_back_buffer_states.clear();
     camera_output_resources.clear();
     camera_output_source_states.clear();
+    camera_output_source_layouts.clear();
     menu_output_resources.clear();
     menu_output_source_states.clear();
     known_camera_output_resources.clear();
@@ -11651,6 +11750,7 @@ HRESULT STDMETHODCALLTYPE resize_buffers1_hook(
     swapchain_back_buffer_states.clear();
     camera_output_resources.clear();
     camera_output_source_states.clear();
+    camera_output_source_layouts.clear();
     menu_output_resources.clear();
     menu_output_source_states.clear();
     known_camera_output_resources.clear();
@@ -15297,10 +15397,42 @@ int ensure_eye_surfaces(ID3D12Device* device,
   return 0;
 }
 
+// Leaves (restore=false) or restores the enhanced layout an eye final was
+// left in around the copy. Each ExecuteCommandLists call starts after the
+// previous one has finished, so nothing earlier in this list needs syncing.
+bool enhanced_copy_source_barrier(ID3D12GraphicsCommandList* commands,
+                                  ID3D12Resource* resource,
+                                  D3D12_BARRIER_LAYOUT layout, bool restore) {
+  ComPtr<ID3D12GraphicsCommandList7> commands7;
+  if (FAILED(commands->QueryInterface(IID_PPV_ARGS(&commands7)))) {
+    return false;
+  }
+  D3D12_TEXTURE_BARRIER texture{};
+  texture.SyncBefore =
+      restore ? D3D12_BARRIER_SYNC_COPY : D3D12_BARRIER_SYNC_NONE;
+  texture.SyncAfter =
+      restore ? D3D12_BARRIER_SYNC_NONE : D3D12_BARRIER_SYNC_COPY;
+  texture.AccessBefore = restore ? D3D12_BARRIER_ACCESS_COPY_SOURCE
+                                 : D3D12_BARRIER_ACCESS_NO_ACCESS;
+  texture.AccessAfter = restore ? D3D12_BARRIER_ACCESS_NO_ACCESS
+                                : D3D12_BARRIER_ACCESS_COPY_SOURCE;
+  texture.LayoutBefore = restore ? D3D12_BARRIER_LAYOUT_COPY_SOURCE : layout;
+  texture.LayoutAfter = restore ? layout : D3D12_BARRIER_LAYOUT_COPY_SOURCE;
+  texture.pResource = resource;
+  texture.Subresources.IndexOrFirstMipLevel = 0xffffffff;
+  D3D12_BARRIER_GROUP group{};
+  group.Type = D3D12_BARRIER_TYPE_TEXTURE;
+  group.NumBarriers = 1;
+  group.pTextureBarriers = &texture;
+  commands7->Barrier(1, &group);
+  return true;
+}
+
 int capture_eye_from_resource(int eye, ID3D12CommandQueue* supplied_queue,
                               ID3D12Resource* supplied_back_buffer,
                               bool bypass_execute_hook,
-                              D3D12_RESOURCE_STATES source_state) {
+                              D3D12_RESOURCE_STATES source_state,
+                              std::optional<D3D12_BARRIER_LAYOUT> source_layout) {
   if (eye < 0 || eye > 1) {
     return 30;
   }
@@ -15449,7 +15581,14 @@ int capture_eye_from_resource(int eye, ID3D12CommandQueue* supplied_queue,
   barrier.Transition.StateBefore = source_state;
   barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
   barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-  pending.commands->ResourceBarrier(1, &barrier);
+  if (!source_layout) {
+    pending.commands->ResourceBarrier(1, &barrier);
+  } else if (!enhanced_copy_source_barrier(pending.commands.Get(),
+                                           back_buffer.Get(),
+                                           *source_layout, false)) {
+    pending.commands->Close();
+    return 38;
+  }
   D3D12_RESOURCE_BARRIER destination_barrier{};
   destination_barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
   destination_barrier.Transition.pResource = eye_surface.Get();
@@ -15511,8 +15650,13 @@ int capture_eye_from_resource(int eye, ID3D12CommandQueue* supplied_queue,
     pending.commands->ResourceBarrier(
         static_cast<UINT>(mirror_barriers.size()), mirror_barriers.data());
   }
-  std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
-  pending.commands->ResourceBarrier(1, &barrier);
+  if (!source_layout) {
+    std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+    pending.commands->ResourceBarrier(1, &barrier);
+  } else {
+    enhanced_copy_source_barrier(pending.commands.Get(), back_buffer.Get(),
+                                 *source_layout, true);
+  }
   if (FAILED(pending.commands->Close())) {
     return 34;
   }
@@ -17352,6 +17496,7 @@ extern "C" __declspec(dllexport) int dtvr_prepare_process_exit() {
     swapchain_back_buffer_states.clear();
     camera_output_resources.clear();
     camera_output_source_states.clear();
+    camera_output_source_layouts.clear();
     menu_output_resources.clear();
     menu_output_source_states.clear();
     known_camera_output_resources.clear();
@@ -17503,6 +17648,27 @@ dtvr_boundary_tag_queue_depth() {
 extern "C" __declspec(dllexport) unsigned long long
 dtvr_boundary_tag_reset_count() {
   return boundary_tag_reset_count.load(std::memory_order_relaxed);
+}
+// The eye-output census for the console log: legacy completions on the eye
+// finals, legacy RENDER_TARGET -> shader-resource steps on any eye-sized
+// texture, enhanced Barrier calls, enhanced barriers on the eye finals,
+// enhanced completions used for capture, the last enhanced layouts
+// (before << 16 | after) and whether both eye finals are identified.
+extern "C" __declspec(dllexport) int dtvr_eye_output_census(
+    unsigned long long* values, unsigned int count) {
+  if (!values || count < 7) {
+    return 1;
+  }
+  values[0] = eye_output_legacy_completions.load(std::memory_order_relaxed);
+  values[1] =
+      eye_output_legacy_extent_completions.load(std::memory_order_relaxed);
+  values[2] = enhanced_barrier_calls.load(std::memory_order_relaxed);
+  values[3] = eye_output_enhanced_barriers.load(std::memory_order_relaxed);
+  values[4] = eye_output_enhanced_completions.load(std::memory_order_relaxed);
+  values[5] = eye_output_enhanced_last_layouts.load(std::memory_order_relaxed);
+  values[6] =
+      named_camera_outputs_ready_hint.load(std::memory_order_acquire) ? 1 : 0;
+  return 0;
 }
 // action 0 disarms, 1 keeps the particle world off the next second-eye world
 // update, 2 only observes it. 1 when done, 0 when this game build has no

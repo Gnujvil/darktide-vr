@@ -753,6 +753,7 @@ local function ensure_ui_native_hooks()
         unsigned long long dtvr_boundary_eye_pose_sequence(int eye);
         unsigned long long dtvr_boundary_tag_queue_depth(void);
         unsigned long long dtvr_boundary_tag_reset_count(void);
+        int dtvr_eye_output_census(unsigned long long* values, unsigned int count);
         unsigned long long dtvr_ready_value(void);
         unsigned long long dtvr_execute_call_count(void);
         unsigned long long dtvr_present_count(void);
@@ -3549,6 +3550,23 @@ local function report_native_observer()
             tonumber(ui_native_capture.dtvr_boundary_tag_queue_depth()),
             tonumber(ui_native_capture.dtvr_boundary_tag_reset_count())
         )
+        -- Which barrier API reports the eye finals' completion (Bimo, 25
+        -- October: no capture ever matched). Layouts are D3D12_BARRIER_LAYOUT.
+        if presentation.native_export(ui_native_capture, "dtvr_eye_output_census") then
+            local census = presentation.eye_output_census_values
+            if not census then
+                census = Mods.lua.ffi.new("unsigned long long[7]")
+                presentation.eye_output_census_values = census
+            end
+            if tonumber(ui_native_capture.dtvr_eye_output_census(census, 7)) == 0 then
+                local layouts = tonumber(census[5])
+                mod:info(
+                    "DARKTIDEVR_STEREO eye_output legacy=%d legacy_eye_sized=%d enhanced_calls=%d enhanced_eye=%d enhanced_captures=%d enhanced_layouts=%d->%d named=%d",
+                    tonumber(census[0]), tonumber(census[1]), tonumber(census[2]),
+                    tonumber(census[3]), tonumber(census[4]),
+                    math.floor(layouts / 65536), layouts % 65536, tonumber(census[6]))
+            end
+        end
         if presentation.second_eye_world_update_guard then
             mod:info(
                 "DARKTIDEVR_STEREO second_eye_world_update kept_off_particles=%d sent_changes=%d unchanged=%d unconsumed=%d",
